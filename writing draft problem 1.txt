@@ -1,0 +1,25 @@
+[1](+ [2]1 [3](first [4](cons [5]true [6]empty)))
+
+{+} = {[2]} {[3]} -> {[1]}
+{+} = number number -> number
+{[2]} = number
+{first} = {[4]} -> {[3]}
+{first} = list<alpha> -> alpha
+{cons} = {[5]} {[6]} -> {[4]}
+{cons} = beta list<beta> -> list<beta>
+{[5]} = boolean
+{[6]} = list<gamma>
+
+stack:
+    number = boolean
+    list<number> = list<gamma>
+subst:
+    {+} = number number -> number
+    {[2]} = number
+    {[3]} = number
+    {[1]} = number
+    {[4]} = list<number>
+    alpha = number
+    {[5]} = number
+    {[6]} = list<number>
+    beta = number

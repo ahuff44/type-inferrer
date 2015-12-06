@@ -1,0 +1,450 @@
+In the following source code, when I write "[n]" I mean that I am labelling the expression following the "[n]" with the label [n].
+
+    [1]{fun {f : B1} : B2
+      [2]{fun {x : B3} : B4
+        [3]{fun {y : B5} : B6
+          [4]{cons [5]x [6]{f [7]{f [8]y}}}}}}
+
+In the following constraints, {w} means "the type of w", and [n] means "the expression referred to by label [n]". These are the constraints generated:
+
+    {[1]} = (B1 -> B2)
+    {f} = B1
+    {[2]} = B2
+    {[2]} = (B3 -> B4)
+    {x} = B3
+    {[3]} = B4
+    {[3]} = (B5 -> B6)
+    {y} = B5
+    {[4]} = B6
+    {cons} = ({[5]} {[6]} -> {[4]})
+    {cons} = (A1 list<A1> -> list<A1>)
+    {[5]} = {x}
+    {f} = ({[7]} -> {[6]})
+    {f} = ({[8]} -> {[7]})
+    {[8]} = {y}
+
+In the following algorithm, when there is a "a = b" entry in the substitution, this means that a should be replaced by b. (Perhaps it would have been clearer to write this as "a ↦ b")
+
+The following steps show the state of the stack (with the top of the stack presented first) and the substitution as I execute the Hindley-Milner algorithm:
+
+    starting stack:
+        {[1]} = (B1 -> B2)
+        {f} = B1
+        {[2]} = B2
+        {[2]} = (B3 -> B4)
+        {x} = B3
+        {[3]} = B4
+        {[3]} = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> {[4]})
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = {x}
+        {f} = ({[7]} -> {[6]})
+        {f} = ({[8]} -> {[7]})
+        {[8]} = {y}
+    (the starting substitution is empty)
+
+    stack:
+        {f} = B1
+        {[2]} = B2
+        {[2]} = (B3 -> B4)
+        {x} = B3
+        {[3]} = B4
+        {[3]} = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> {[4]})
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = {x}
+        {f} = ({[7]} -> {[6]})
+        {f} = ({[8]} -> {[7]})
+        {[8]} = {y}
+    subst:
+        {[1]} = (B1 -> B2)
+
+    stack:
+        {[2]} = B2
+        {[2]} = (B3 -> B4)
+        {x} = B3
+        {[3]} = B4
+        {[3]} = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> {[4]})
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = {x}
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = {y}
+    subst:
+        {[1]} = (B1 -> B2)
+        {f} = B1
+
+    stack:
+        B2 = (B3 -> B4)
+        {x} = B3
+        {[3]} = B4
+        {[3]} = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> {[4]})
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = {x}
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = {y}
+    subst:
+        {[1]} = (B1 -> B2)
+        {f} = B1
+        {[2]} = B2
+
+    stack:
+        {x} = B3
+        {[3]} = B4
+        {[3]} = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> {[4]})
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = {x}
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = {y}
+    subst:
+        {[1]} = (B1 -> (B3 -> B4))
+        {f} = B1
+        {[2]} = (B3 -> B4)
+        B2 = (B3 -> B4)
+
+    stack:
+        {[3]} = B4
+        {[3]} = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> {[4]})
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = B3
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = {y}
+    subst:
+        {[1]} = (B1 -> (B3 -> B4))
+        {f} = B1
+        {[2]} = (B3 -> B4)
+        B2 = (B3 -> B4)
+        {x} = B3
+
+    stack:
+        B4 = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> {[4]})
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = B3
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = {y}
+    subst:
+        {[1]} = (B1 -> (B3 -> B4))
+        {f} = B1
+        {[2]} = (B3 -> B4)
+        B2 = (B3 -> B4)
+        {x} = B3
+        {[3]} = B4
+
+    stack:
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> {[4]})
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = B3
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = {y}
+    subst:
+        {[1]} = (B1 -> (B3 -> (B5 -> B6)))
+        {f} = B1
+        {[2]} = (B3 -> (B5 -> B6))
+        B2 = (B3 -> (B5 -> B6))
+        {x} = B3
+        {[3]} = (B5 -> B6)
+        B4 = (B5 -> B6)
+
+    stack:
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> {[4]})
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = B3
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = B5
+    subst:
+        {[1]} = (B1 -> (B3 -> (B5 -> B6)))
+        {f} = B1
+        {[2]} = (B3 -> (B5 -> B6))
+        B2 = (B3 -> (B5 -> B6))
+        {x} = B3
+        {[3]} = (B5 -> B6)
+        B4 = (B5 -> B6)
+        {y} = B5
+
+    stack:
+        {cons} = ({[5]} {[6]} -> B6)
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = B3
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = B5
+    subst:
+        {[1]} = (B1 -> (B3 -> (B5 -> B6)))
+        {f} = B1
+        {[2]} = (B3 -> (B5 -> B6))
+        B2 = (B3 -> (B5 -> B6))
+        {x} = B3
+        {[3]} = (B5 -> B6)
+        B4 = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+
+    stack:
+        ({[5]} {[6]} -> B6) = (A1 list<A1> -> list<A1>)
+        {[5]} = B3
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = B5
+    subst:
+        {[1]} = (B1 -> (B3 -> (B5 -> B6)))
+        {f} = B1
+        {[2]} = (B3 -> (B5 -> B6))
+        B2 = (B3 -> (B5 -> B6))
+        {x} = B3
+        {[3]} = (B5 -> B6)
+        B4 = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> B6)
+
+    stack:
+        {[5]} = A1
+        {[6]} = list<A1>
+        B6 = list<A1>
+        {[5]} = B3
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = B5
+    subst:
+        {[1]} = (B1 -> (B3 -> (B5 -> B6)))
+        {f} = B1
+        {[2]} = (B3 -> (B5 -> B6))
+        B2 = (B3 -> (B5 -> B6))
+        {x} = B3
+        {[3]} = (B5 -> B6)
+        B4 = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = ({[5]} {[6]} -> B6)
+
+    stack:
+        {[6]} = list<A1>
+        B6 = list<A1>
+        A1 = B3
+        B1 = ({[7]} -> {[6]})
+        B1 = ({[8]} -> {[7]})
+        {[8]} = B5
+    subst:
+        {[1]} = (B1 -> (B3 -> (B5 -> B6)))
+        {f} = B1
+        {[2]} = (B3 -> (B5 -> B6))
+        B2 = (B3 -> (B5 -> B6))
+        {x} = B3
+        {[3]} = (B5 -> B6)
+        B4 = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = (A1 {[6]} -> B6)
+        {[5]} = A1
+
+    stack:
+        B6 = list<A1>
+        A1 = B3
+        B1 = ({[7]} -> list<A1>)
+        B1 = ({[8]} -> {[7]})
+        {[8]} = B5
+    subst:
+        {[1]} = (B1 -> (B3 -> (B5 -> B6)))
+        {f} = B1
+        {[2]} = (B3 -> (B5 -> B6))
+        B2 = (B3 -> (B5 -> B6))
+        {x} = B3
+        {[3]} = (B5 -> B6)
+        B4 = (B5 -> B6)
+        {y} = B5
+        {[4]} = B6
+        {cons} = (A1 list<A1> -> B6)
+        {[5]} = A1
+        {[6]} = list<A1>
+
+    stack:
+        A1 = B3
+        B1 = ({[7]} -> list<A1>)
+        B1 = ({[8]} -> {[7]})
+        {[8]} = B5
+    subst:
+        {[1]} = (B1 -> (B3 -> (B5 -> list<A1>)))
+        {f} = B1
+        {[2]} = (B3 -> (B5 -> list<A1>))
+        B2 = (B3 -> (B5 -> list<A1>))
+        {x} = B3
+        {[3]} = (B5 -> list<A1>)
+        B4 = (B5 -> list<A1>)
+        {y} = B5
+        {[4]} = list<A1>
+        {cons} = (A1 list<A1> -> list<A1>)
+        {[5]} = A1
+        {[6]} = list<A1>
+        B6 = list<A1>
+
+    stack:
+        B1 = ({[7]} -> list<B3>)
+        B1 = ({[8]} -> {[7]})
+        {[8]} = B5
+    subst:
+        {[1]} = (B1 -> (B3 -> (B5 -> list<B3>)))
+        {f} = B1
+        {[2]} = (B3 -> (B5 -> list<B3>))
+        B2 = (B3 -> (B5 -> list<B3>))
+        {x} = B3
+        {[3]} = (B5 -> list<B3>)
+        B4 = (B5 -> list<B3>)
+        {y} = B5
+        {[4]} = list<B3>
+        {cons} = (B3 list<B3> -> list<B3>)
+        {[5]} = B3
+        {[6]} = list<B3>
+        B6 = list<B3>
+        A1 = B3
+
+    stack:
+        ({[7]} -> list<B3>) = ({[8]} -> {[7]})
+        {[8]} = B5
+    subst:
+        {[1]} = (({[7]} -> list<B3>) -> (B3 -> (B5 -> list<B3>)))
+        {f} = ({[7]} -> list<B3>)
+        {[2]} = (B3 -> (B5 -> list<B3>))
+        B2 = (B3 -> (B5 -> list<B3>))
+        {x} = B3
+        {[3]} = (B5 -> list<B3>)
+        B4 = (B5 -> list<B3>)
+        {y} = B5
+        {[4]} = list<B3>
+        {cons} = (B3 list<B3> -> list<B3>)
+        {[5]} = B3
+        {[6]} = list<B3>
+        B6 = list<B3>
+        A1 = B3
+        B1 = ({[7]} -> list<B3>)
+
+    stack:
+        {[7]} = {[8]}
+        list<B3> = {[7]}
+        {[8]} = B5
+    subst:
+        {[1]} = (({[7]} -> list<B3>) -> (B3 -> (B5 -> list<B3>)))
+        {f} = ({[7]} -> list<B3>)
+        {[2]} = (B3 -> (B5 -> list<B3>))
+        B2 = (B3 -> (B5 -> list<B3>))
+        {x} = B3
+        {[3]} = (B5 -> list<B3>)
+        B4 = (B5 -> list<B3>)
+        {y} = B5
+        {[4]} = list<B3>
+        {cons} = (B3 list<B3> -> list<B3>)
+        {[5]} = B3
+        {[6]} = list<B3>
+        B6 = list<B3>
+        A1 = B3
+        B1 = ({[7]} -> list<B3>)
+
+    stack:
+        list<B3> = {[8]}
+        {[8]} = B5
+    subst:
+        {[1]} = (({[8]} -> list<B3>) -> (B3 -> (B5 -> list<B3>)))
+        {f} = ({[8]} -> list<B3>)
+        {[2]} = (B3 -> (B5 -> list<B3>))
+        B2 = (B3 -> (B5 -> list<B3>))
+        {x} = B3
+        {[3]} = (B5 -> list<B3>)
+        B4 = (B5 -> list<B3>)
+        {y} = B5
+        {[4]} = list<B3>
+        {cons} = (B3 list<B3> -> list<B3>)
+        {[5]} = B3
+        {[6]} = list<B3>
+        B6 = list<B3>
+        A1 = B3
+        B1 = ({[8]} -> list<B3>)
+        {[7]} = {[8]}
+
+    stack:
+        list<B3> = B5
+    subst:
+        {[1]} = ((list<B3> -> list<B3>) -> (B3 -> (B5 -> list<B3>)))
+        {f} = (list<B3> -> list<B3>)
+        {[2]} = (B3 -> (B5 -> list<B3>))
+        B2 = (B3 -> (B5 -> list<B3>))
+        {x} = B3
+        {[3]} = (B5 -> list<B3>)
+        B4 = (B5 -> list<B3>)
+        {y} = B5
+        {[4]} = list<B3>
+        {cons} = (B3 list<B3> -> list<B3>)
+        {[5]} = B3
+        {[6]} = list<B3>
+        B6 = list<B3>
+        A1 = B3
+        B1 = (list<B3> -> list<B3>)
+        {[7]} = list<B3>
+        {[8]} = list<B3>
+
+    stack:
+    subst:
+        {[1]} = ((list<B3> -> list<B3>) -> (B3 -> (list<B3> -> list<B3>)))
+        {f} = (list<B3> -> list<B3>)
+        {[2]} = (B3 -> (list<B3> -> list<B3>))
+        B2 = (B3 -> (list<B3> -> list<B3>))
+        {x} = B3
+        {[3]} = (list<B3> -> list<B3>)
+        B4 = (list<B3> -> list<B3>)
+        {y} = list<B3>
+        {[4]} = list<B3>
+        {cons} = (B3 list<B3> -> list<B3>)
+        {[5]} = B3
+        {[6]} = list<B3>
+        B6 = list<B3>
+        A1 = B3
+        B1 = (list<B3> -> list<B3>)
+        {[7]} = list<B3>
+        {[8]} = list<B3>
+        B5 = list<B3>
+
+Here is a cleaned-up version of the final substition:
+    {[1]} = ((list<B3> -> list<B3>) -> (B3 -> (list<B3> -> list<B3>)))
+    {[2]} = (B3 -> (list<B3> -> list<B3>))
+    {[3]} = (list<B3> -> list<B3>)
+    {[4]} = list<B3>
+    {[5]} = B3
+    {[6]} = list<B3>
+    {[7]} = list<B3>
+    {[8]} = list<B3>
+    {f} = (list<B3> -> list<B3>)
+    {x} = B3
+    {y} = list<B3>
+    {cons} = (B3 list<B3> -> list<B3>)
+    A1 = B3
+    B1 = (list<B3> -> list<B3>)
+    B2 = (B3 -> (list<B3> -> list<B3>))
+    B4 = (list<B3> -> list<B3>)
+    B5 = list<B3>
+    B6 = list<B3>
