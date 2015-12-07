@@ -318,18 +318,67 @@
   (type-case Expr e
     [num (n) (list (eqc (t-var e-id) (t-num)))]
     [id (v) (list (eqc (t-var e-id) (t-var v)))]
-    ; ...
+    [bool (b) (list (eqc (t-var e-id) (t-bool)))]
     [bin-num-op (op lhs rhs)
-                (local ([define lhs-id (gensym 'lhs)]
-                        [define rhs-id (gensym 'rhs)]
-                        [define lhs-c (generate-constraints lhs-id lhs)]
-                        [define rhs-c (generate-constraints rhs-id rhs)])
-                  (append
-                    (list (eqc (t-var e-id) (t-num))
-                          (eqc (t-var lhs-id) (t-num))
-                          (eqc (t-var rhs-id) (t-num)))
-                    lhs-c
-                    rhs-c))]
+      (local ([define lhs-id (gensym 'lhs)]
+              [define rhs-id (gensym 'rhs)]
+              [define lhs-c (generate-constraints lhs-id lhs)]
+              [define rhs-c (generate-constraints rhs-id rhs)])
+        (append
+          (list (eqc (t-var e-id) (t-num))
+                (eqc (t-var lhs-id) (t-num))
+                (eqc (t-var rhs-id) (t-num)))
+          lhs-c
+          rhs-c))]
+    [iszero (arg)
+      (local ([define arg-id (gensym 'iszero)]
+              [define arg-c (generate-constraints arg-id arg)])
+        (append
+          (list (eqc (t-var e-id) (t-bool))
+                (eqc (t-var arg-id) (t-num)))
+          arg-c))]
+    [bif (pred if-true if-false)
+      (local ([define pred-id (gensym 'pred)]
+              [define true-id (gensym 'if-true)]
+              [define false-id (gensym 'if-false)]
+              [define pred-c (generate-constraints pred-id if-pred)]
+              [define true-c (generate-constraints true-id if-true)]
+              [define false-c (generate-constraints false-id if-false)])
+        (append
+          (list (eqc (t-var pred-id) (t-bool))
+                (eqc (t-var e-id) (t-var true-id))
+                (eqc (t-var e-id) (t-var false-id)))
+          pred-c
+          true-c
+          false-c))]
+    [with (bound-id bound-body with-body)
+      (error "unimplemented")]
+    [rec-with (bound-id bound-body body)
+      (error "unimplemented")]
+    [fun (arg-id body)
+      (error "unimplemented")]
+    [app (fun-expr arg-expr)
+      (error "unimplemented")]
+    [tempty
+      (list (eqc (t-var e-id) (t-list ?)))] ; TODO: fill in ?'s
+    [tcons (fst rst)
+      (local ([define fst-id (gensym 'fst)]
+              [define rst-id (gensym 'rst)]
+              [define list-type-id (gensym 'list-type)]
+              [define fst-c (generate-constraints fst-id fst)]
+              [define rst-c (generate-constraints rst-id rst)])
+        (append
+          (list (eqc (t-var e-id) (t-list ?))
+                (eqc (t-var fst-id) (t-? ))
+                (eqc (t-var rst-id) (t-list ?)))
+          fst-c
+          rst-c))]
+    [tfirst (arg)
+      (error "unimplemented")]
+    [trest (arg)
+      (error "unimplemented")]
+    [istempty (arg)
+      (error "unimplemented")]
     [else
       (error "Constraint generation is not fully implemented yet.")]))
 
