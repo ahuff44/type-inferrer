@@ -360,19 +360,9 @@
     [app (fun-expr arg-expr)
       (error "unimplemented")]
     [tempty
-      (list (eqc (t-var e-id) (t-list ?)))] ; TODO: fill in ?'s
+      (list (eqc (t-var e-id) (t-list ?)))] ; TODO: fill in ?
     [tcons (fst rst)
-      (local ([define fst-id (gensym 'fst)]
-              [define rst-id (gensym 'rst)]
-              [define list-type-id (gensym 'list-type)]
-              [define fst-c (generate-constraints fst-id fst)]
-              [define rst-c (generate-constraints rst-id rst)])
-        (append
-          (list (eqc (t-var e-id) (t-list ?))
-                (eqc (t-var fst-id) (t-? ))
-                (eqc (t-var rst-id) (t-list ?)))
-          fst-c
-          rst-c))]
+      (error "unimplemented")]
     [tfirst (arg)
       (error "unimplemented")]
     [trest (arg)
@@ -383,23 +373,114 @@
       (error "Constraint generation is not fully implemented yet.")]))
 
   ; tests
-    ; TODO: test
+    ; basic tests
+      (define num-test-str '1)
+      (define num-test-exp (num 1))
+      (define num-test-constraints
+        (list (eqc (t-var 'top) (t-num))))
+      (test (parse num-test-str) num-test-exp)
+      (test/pred (generate-constraints (gensym 'top) num-test-exp)
+                 (constraint-list=? num-test-constraints))
 
-    (define num-test-exp (num 1))
-    (define num-test-constraints
-      (list (eqc (t-var 'top) (t-num))))
-    (test/pred (generate-constraints (gensym 'top) num-test-exp)
-               (constraint-list=? num-test-constraints))
+      ; TODO: should this test error instead? I think it's correct as-is
+      (define id-test-str 'x)
+      (define id-test-exp (id 'x))
+      (define id-test-constraints
+        (list (eqc (t-var 'top) (t-id))))
+      (test (parse id-test-str) id-test-exp)
+      (test/pred (generate-constraints (gensym 'top) id-test-exp)
+                 (constraint-list=? id-test-constraints))
 
-    (define plus-test-expr (bin-num-op + (num 1) (num 2)))
-    (define plus-test-constraints
-      (list (eqc (t-var 'top) (t-num))
-            (eqc (t-var 'binop-left) (t-num))
-            (eqc (t-var 'binop-right) (t-num))
-            (eqc (t-var 'binop-left) (t-num))
-            (eqc (t-var 'binop-right) (t-num))))
-    (test/pred (generate-constraints (gensym 'top) plus-test-expr)
-               (constraint-list=? plus-test-constraints))
+      (define plus-test-str '{+ 1 2})
+      (define plus-test-expr (bin-num-op + (num 1) (num 2)))
+      (define plus-test-constraints
+        (list (eqc (t-var 'top) (t-num))
+              (eqc (t-var 'lhs) (t-num))
+              (eqc (t-var 'rhs) (t-num))
+              (eqc (t-var 'num1) (t-num))
+              (eqc (t-var 'num2) (t-num))))
+      (test (parse plus-test-str) plus-test-exp)
+      (test/pred (generate-constraints (gensym 'top) plus-test-expr)
+                 (constraint-list=? plus-test-constraints))
+
+      (define minus-test-str '{- 1 2})
+      (define minus-test-expr (bin-num-op - (num 1) (num 2)))
+      (define minus-test-constraints
+        (list (eqc (t-var 'top) (t-num))
+              (eqc (t-var 'lhs) (t-num))
+              (eqc (t-var 'rhs) (t-num))
+              (eqc (t-var 'num1) (t-num))
+              (eqc (t-var 'num2) (t-num))))
+      (test (parse minus-test-str) minus-test-exp)
+      (test/pred (generate-constraints (gensym 'top) minus-test-expr)
+                 (constraint-list=? minus-test-constraints))
+
+      (define times-test-str '{* 1 2})
+      (define times-test-expr (bin-num-op * (num 1) (num 2)))
+      (define times-test-constraints
+        (list (eqc (t-var 'top) (t-num))
+              (eqc (t-var 'lhs) (t-num))
+              (eqc (t-var 'rhs) (t-num))
+              (eqc (t-var 'num1) (t-num))
+              (eqc (t-var 'num2) (t-num))))
+      (test (parse times-test-str) times-test-exp)
+      (test/pred (generate-constraints (gensym 'top) times-test-expr)
+                 (constraint-list=? times-test-constraints))
+
+      (define bool-test-str '{false})
+      (define bool-test-exp (bool false))
+      (define bool-test-constraints
+        (list (eqc (t-var 'top) (t-bool))))
+      (test (parse bool-test-str) bool-test-exp)
+      (test/pred (generate-constraints (gensym 'top) bool-test-exp)
+                 (constraint-list=? bool-test-constraints))
+
+      (define iszero-test-str '{iszero 5})
+      (define iszero-test-exp (iszero (num 5)))
+      (define iszero-test-constraints
+        (list (eqc (t-var 'top) (t-bool)))
+        (list (eqc (t-var 'num) (t-num)))
+        (list (eqc (t-var 'iszero-arg) (t-num))))
+      (test (parse iszero-test-str) iszero-test-exp)
+      (test/pred (generate-constraints (gensym 'top) iszero-test-exp)
+                 (constraint-list=? iszero-test-constraints))
+
+      ; should not find type errors
+      (define notypeerror-test-str2 '{iszero true})
+      (define notypeerror-test-exp2 (iszero (bool true)))
+      (define notypeerror-test-constraints2
+        (list (eqc (t-var 'top) (t-bool)))
+        (list (eqc (t-var 'bool) (t-bool)))
+        (list (eqc (t-var 'iszero-arg) (t-num))))
+      (test (parse notypeerror-test-str2) notypeerror-test-exp2)
+      (test/pred (generate-constraints (gensym 'top) notypeerror-test-exp2)
+                 (constraint-list=? notypeerror-test-constraints2))
+
+      (define bif-test-str '{bif true 1 2})
+      (define bif-test-exp (bif (bool true) (num 1) (num 2)))
+      (define bif-test-constraints
+        (list (eqc (t-var 'top) (t-num)))
+        (list (eqc (t-var 'bool) (t-bool)))
+        (list (eqc (t-var 'if-true) (t-num)))
+        (list (eqc (t-var 'if-false) (t-num)))
+        (list (eqc (t-var 'num1) (t-num)))
+        (list (eqc (t-var 'num2) (t-num))))
+      (test (parse bif-test-str) bif-test-exp)
+      (test/pred (generate-constraints (gensym 'top) bif-test-exp)
+                 (constraint-list=? bif-test-constraints))
+
+      ; TODO: basic tests for:
+      ;   with
+      ;   rec-with
+      ;   fun
+      ;   app
+      ;   tempty
+      ;   tcons
+      ;   tfirst
+      ;   trest
+      ;   istempty
+
+    ; TODO: extensive tests
 
 ; unify : (listof Constraint) -> (listof Constraint)
 ; TODO: document this
