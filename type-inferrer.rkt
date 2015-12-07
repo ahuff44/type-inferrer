@@ -166,12 +166,12 @@
            (parse false-branch))]
 
     ; |   (with (id expr) expr)
-    [(list 'with (list bound-id bound-expr) body)
+    [(list 'with (list bound-id bound-expr) with-body)
       (unless (symbol? bound-id)
         (error 'parse "Syntax Error: Non-symbol bind target"))
       (with bound-id
             (parse bound-expr)
-            (parse body))]
+            (parse with-body))]
 
     ; |   (rec (id expr) expr)
     [(list 'rec (list bound-id bound-expr) body)
@@ -263,11 +263,54 @@
 ; alpha-vary : Expr -> Expr
 ; TODO: why does this need to throw errors for unbound ids?
 ;   I guess otherwise ((compose infer-type parse) '(with (x 5) y))) would return a meta-type (inherited from y's unconstrained type)?
-(define (alpha-vary expr)
-  (error "unimplemented"))
-  ; TODO implement; probably by calling (alpha-vary/helper expr emptyEnv)
-  ; tests
-    (test )
+(define alpha-vary ((curry alpha-vary/helper) (make-immutable-hasheq)))
+  ; TODO: test
+
+; alpha-vary/helper : hash<symbol, symbol> Expr -> Expr
+(define (alpha-vary/helper hash expr)
+  (define simple-recurse ((curry alpha-vary/helper) hash))
+  (type-case Expr expr
+    [num (n)
+      expr] ; TODO: is it bad to not create a new expr; (i.e. return (num n) instead?) I can only see this mattering if I use an expr multiple times... but I guess alpha-varying multiple times wouldn't be bad... right?
+    [id (v)
+      (id (hash-ref hash v (lambda ()
+                             (error 'alpha-vary "Type Error: Unbound identifier"))))]
+    [bool (b)
+      expr]
+    [bin-num-op (op lhs rhs)
+      (bin-num-op op (simple-recurse lhs) (simple-recurse rhs))]
+    [iszero (e)
+      (simple-recurse e)]
+    [bif (c t e)
+      (bif (simple-recurse c) (simple-recurse t) (simple-recurse e))]
+    [with (bound-id bound-body with-body)
+      (let ([new-id (gensym bound-id)])
+        (hash-set! hash bound-id new-id)
+        (with new-id
+              (simple-recurse bound-body) ; TODO: will this break on '{with x 1 {with x {+ x x} 2}}
+              (alpha-vary hash with-body)))]
+    [rec-with (bound-id bound-body body)
+      (let ([new-id (gensym bound-id)])
+        (hash-set! hash bound-id new-id)
+        (with new-id
+              (alpha-vary hash bound-body) ; TODO: will this work on '{with x {+ x x} 1}
+              (simple-recurse body)))] ; TODO: I don't understand how to use rec-with so idk if this should be alpha-vary or simple-recurse
+    [fun (arg-id body)
+      (let ([new-id (gensym arg-id)])
+        (hash-set! hash arg-id new-id)
+        (fun new-id (alpha-vary hash body)))]
+    [app (fun-expr arg-expr)
+      (app (simple-recurse fun-expr) (simple-recurse arg-expr))]
+    [tempty
+      expr]
+    [tcons (fst rst)
+      (tcons (simple-recurse fst) (simple-recurse rst))]
+    [tfirst (e)
+      (tfirst (simple-recurse e))]
+    [trest (e)
+      (trest (simple-recurse e))]
+    [istempty (e)
+      (istempty (simple-recurse e))]))
 
 ; generate-constraints : symbol Expr -> (listof Constraint)
 ; TODO: document this
