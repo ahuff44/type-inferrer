@@ -469,12 +469,29 @@
       (test/pred (generate-constraints (gensym 'top) bif-test-exp)
                  (constraint-list=? bif-test-constraints))
 
+      ; TODO: is this test correct?
+      (define tempty-test-str 'tempty)
+      (define tempty-test-exp (tempty))
+      (define tempty-test-constraints
+        (list (eqc (t-var 'top) (t-list (t-var 'alpha)))))
+      (test (parse tempty-test-str) tempty-test-exp)
+      (test/pred (generate-constraints (gensym 'top) tempty-test-exp)
+                 (constraint-list=? tempty-test-constraints))
+
+      ; TODO: test that type=?/mapping won't prematurely unify types; e.g. say that (list<A>, list<A>) is equal to (list<B>, list<A>)... or should it? I feel like it should actually say they're the same but it would be an error in the code in the following example, or something similar
+      (define tcons-test-str '{tcons 1 tempty})
+      (define tcons-test-exp (tcons (num 1) (tempty)))
+      (define tcons-test-constraints
+        (list (eqc (t-var 'top) ?) ; TODO: finish this
+      (test (parse tcons-test-str) tcons-test-exp)
+      (test/pred (generate-constraints (gensym 'top) tcons-test-exp)
+                 (constraint-list=? tcons-test-constraints))
+
       ; TODO: basic tests for:
       ;   with
       ;   rec-with
       ;   fun
       ;   app
-      ;   tempty
       ;   tcons
       ;   tfirst
       ;   trest
