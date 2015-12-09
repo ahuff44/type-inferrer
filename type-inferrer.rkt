@@ -1,5 +1,6 @@
 #lang plai
-(print-only-errors #t)
+(print-only-errors #f)
+(halt-on-errors #t)
 
 (define-type Expr
   [num (n number?)]
@@ -260,23 +261,18 @@
     (test (parse '{trest tempty}) (trest (tempty)))
     (test (parse '{trest (tcons 1 tempty)}) (trest (tcons (num 1) (tempty))))
 
-; alpha-vary : Expr -> Expr
-; TODO: why does this need to throw errors for unbound ids?
-;   I guess otherwise ((compose infer-type parse) '(with (x 5) y))) would return a meta-type (inherited from y's unconstrained type)?
-(define alpha-vary ((curry alpha-vary/helper) (make-immutable-hasheq)))
-  ; TODO: test
-
 ; alpha-vary/helper : hash<symbol, symbol> Expr -> Expr
+; TODO: document this
 (define (alpha-vary/helper hash expr)
   (define simple-recurse ((curry alpha-vary/helper) hash))
   (type-case Expr expr
     [num (n)
-      expr] ; TODO: is it bad to not create a new expr; (i.e. return (num n) instead?) I can only see this mattering if I use an expr multiple times... but I guess alpha-varying multiple times wouldn't be bad... right?
+      (num n)]
     [id (v)
       (id (hash-ref hash v (lambda ()
                              (error 'alpha-vary "Type Error: Unbound identifier"))))]
     [bool (b)
-      expr]
+      (bool b)]
     [bin-num-op (op lhs rhs)
       (bin-num-op op (simple-recurse lhs) (simple-recurse rhs))]
     [iszero (e)
@@ -284,25 +280,25 @@
     [bif (c t e)
       (bif (simple-recurse c) (simple-recurse t) (simple-recurse e))]
     [with (bound-id bound-body with-body)
-      (let ([new-id (gensym bound-id)])
-        (hash-set! hash bound-id new-id)
+      (let* ([new-id (gensym bound-id)]
+             [new-hash (hash-set hash bound-id new-id)])
         (with new-id
-              (simple-recurse bound-body) ; TODO: will this break on '{with x 1 {with x {+ x x} 2}}
-              (alpha-vary hash with-body)))]
-    [rec-with (bound-id bound-body body)
-      (let ([new-id (gensym bound-id)])
-        (hash-set! hash bound-id new-id)
-        (with new-id
-              (alpha-vary hash bound-body) ; TODO: will this work on '{with x {+ x x} 1}
-              (simple-recurse body)))] ; TODO: I don't understand how to use rec-with so idk if this should be alpha-vary or simple-recurse
+              (simple-recurse bound-body)
+              (alpha-vary/helper new-hash with-body)))]
+    [rec-with (bound-id bound-body with-body)
+      (let* ([new-id (gensym bound-id)]
+             [new-hash (hash-set hash bound-id new-id)])
+        (rec-with new-id
+                  (alpha-vary/helper new-hash bound-body)
+                  (alpha-vary/helper new-hash with-body)))]
     [fun (arg-id body)
-      (let ([new-id (gensym arg-id)])
-        (hash-set! hash arg-id new-id)
-        (fun new-id (alpha-vary hash body)))]
+      (let* ([new-id (gensym arg-id)]
+             [new-hash (hash-set hash arg-id new-id)])
+        (fun new-id (alpha-vary/helper new-hash body)))]
     [app (fun-expr arg-expr)
       (app (simple-recurse fun-expr) (simple-recurse arg-expr))]
-    [tempty
-      expr]
+    [tempty ()
+      (tempty)]
     [tcons (fst rst)
       (tcons (simple-recurse fst) (simple-recurse rst))]
     [tfirst (e)
@@ -311,6 +307,16 @@
       (trest (simple-recurse e))]
     [istempty (e)
       (istempty (simple-recurse e))]))
+
+; alpha-vary : Expr -> Expr
+; TODO: why does this need to throw errors for unbound ids?
+;   I guess otherwise ((compose infer-type parse) '(with (x 5) y))) would return a meta-type (inherited from y's unconstrained type)?
+(define alpha-vary ((curry alpha-vary/helper) (make-immutable-hasheq)))
+  ; TODO: test (manually)
+    (test/exn (alpha-vary (parse '{with {x {+ x x}} 1})) "Type Error: Unbound identifier")
+    ; TODO: manually test:
+    ;   - '{with {x 1} {with {x {+ x x}} x}}
+    ;   - currently passes
 
 ; generate-constraints : symbol Expr -> (listof Constraint)
 ; TODO: document this
@@ -341,7 +347,7 @@
       (local ([define pred-id (gensym 'pred)]
               [define true-id (gensym 'if-true)]
               [define false-id (gensym 'if-false)]
-              [define pred-c (generate-constraints pred-id if-pred)]
+              [define pred-c (generate-constraints pred-id pred)]
               [define true-c (generate-constraints true-id if-true)]
               [define false-c (generate-constraints false-id if-false)])
         (append
@@ -352,25 +358,81 @@
           true-c
           false-c))]
     [with (bound-id bound-body with-body)
-      (error "unimplemented")]
-    [rec-with (bound-id bound-body body)
-      (error "unimplemented")]
+      (local ([define b-body-id (gensym 'bound-body)]
+              [define w-body-id (gensym 'with-body)]
+              [define b-body-c (generate-constraints b-body-id bound-body)]
+              [define w-body-c (generate-constraints w-body-id with-body)])
+        (append
+          (list (eqc (t-var e-id) (t-var w-body-id))
+                (eqc (t-var bound-id) (t-var b-body-id)))
+          b-body-c
+          w-body-c))]
+    [rec-with (bound-id bound-body with-body)
+      (local (
+              [define b-body-id (gensym 'rec-bound-body)]
+              [define w-body-id (gensym 'rec-with-body)]
+              [define b-body-c (generate-constraints b-body-id bound-body)]
+              [define w-body-c (generate-constraints w-body-id with-body)]
+              )
+        (append
+          (list (eqc (t-var e-id) (t-var w-body-id))
+                (eqc (t-var bound-id) (t-var b-body-id)))
+          b-body-c
+          w-body-c))]
     [fun (arg-id body)
-      (error "unimplemented")]
+      (local ([define body-id (gensym 'body)]
+              [define body-c (generate-constraints body-id body)])
+        (append
+          (list (eqc (t-var e-id) (t-fun (t-var arg-id) (t-var body-id))))
+          body-c))]
     [app (fun-expr arg-expr)
-      (error "unimplemented")]
-    [tempty
-      (list (eqc (t-var e-id) (t-list ?)))] ; TODO: fill in ?
+      (local ([define alpha-id (gensym 'alpha)]
+              [define fun-id (gensym 'fun-expr)]
+              [define arg-id (gensym 'arg-expr)]
+              [define fun-c (generate-constraints fun-id fun-expr)]
+              [define arg-c (generate-constraints arg-id arg-expr)])
+        (append
+          (list (eqc (t-var e-id) (t-var alpha-id))
+                (eqc (t-var fun-id) (t-fun (t-var arg-id) (t-var alpha-id))))
+          fun-c
+          arg-c))]
+    [tempty ()
+      (list (eqc (t-var e-id) (t-list (t-var (gensym 'alpha)))))]
     [tcons (fst rst)
-      (error "unimplemented")]
-    [tfirst (arg)
-      (error "unimplemented")]
-    [trest (arg)
-      (error "unimplemented")]
-    [istempty (arg)
-      (error "unimplemented")]
-    [else
-      (error "Constraint generation is not fully implemented yet.")]))
+      (local ([define alpha-id (gensym 'alpha)]
+              [define fst-id (gensym 'fst)]
+              [define rst-id (gensym 'rst)]
+              [define fst-c (generate-constraints fst-id fst)]
+              [define rst-c (generate-constraints rst-id rst)])
+        (append
+          (list (eqc (t-var e-id) (t-list (t-var alpha-id)))
+                (eqc (t-var fst-id) (t-var alpha-id))
+                (eqc (t-var rst-id) (t-list (t-var alpha-id))))
+          fst-c
+          rst-c))]
+    [tfirst (lst)
+      (local ([define alpha-id (gensym 'alpha)]
+              [define lst-id (gensym 'lst)]
+              [define lst-c (generate-constraints lst-id lst)])
+        (append
+          (list (eqc (t-var 'top) (t-var alpha-id))
+                (eqc (t-var lst-id) (t-list (t-var alpha-id))))
+          lst-c))]
+    [trest (lst)
+      (local ([define alpha-id (gensym 'alpha)]
+              [define lst-id (gensym 'lst)]
+              [define lst-c (generate-constraints lst-id lst)])
+        (append
+          (list (eqc (t-var e-id) (t-list (t-var alpha-id)))
+                (eqc (t-var lst-id) (t-list (t-var alpha-id))))
+          lst-c))]
+    [istempty (lst)
+      (local ([define lst-id (gensym 'lst)]
+              [define lst-c (generate-constraints lst-id lst)])
+        (append
+          (list (eqc (t-var e-id) (t-bool))
+                (eqc (t-var lst-id) (t-list (t-var (gensym 'alpha)))))
+          lst-c))]))
 
   ; tests
     ; basic tests
@@ -382,52 +444,51 @@
       (test/pred (generate-constraints (gensym 'top) num-test-exp)
                  (constraint-list=? num-test-constraints))
 
-      ; TODO: should this test error instead? I think it's correct as-is
       (define id-test-str 'x)
       (define id-test-exp (id 'x))
       (define id-test-constraints
-        (list (eqc (t-var 'top) (t-id))))
+        (list (eqc (t-var 'top) (t-var 'x))))
       (test (parse id-test-str) id-test-exp)
       (test/pred (generate-constraints (gensym 'top) id-test-exp)
                  (constraint-list=? id-test-constraints))
 
       (define plus-test-str '{+ 1 2})
-      (define plus-test-expr (bin-num-op + (num 1) (num 2)))
+      (define plus-test-exp (bin-num-op + (num 1) (num 2)))
       (define plus-test-constraints
         (list (eqc (t-var 'top) (t-num))
               (eqc (t-var 'lhs) (t-num))
               (eqc (t-var 'rhs) (t-num))
-              (eqc (t-var 'num1) (t-num))
-              (eqc (t-var 'num2) (t-num))))
+              (eqc (t-var 'lhs) (t-num))
+              (eqc (t-var 'rhs) (t-num))))
       (test (parse plus-test-str) plus-test-exp)
-      (test/pred (generate-constraints (gensym 'top) plus-test-expr)
+      (test/pred (generate-constraints (gensym 'top) plus-test-exp)
                  (constraint-list=? plus-test-constraints))
 
       (define minus-test-str '{- 1 2})
-      (define minus-test-expr (bin-num-op - (num 1) (num 2)))
+      (define minus-test-exp (bin-num-op - (num 1) (num 2)))
       (define minus-test-constraints
         (list (eqc (t-var 'top) (t-num))
               (eqc (t-var 'lhs) (t-num))
               (eqc (t-var 'rhs) (t-num))
-              (eqc (t-var 'num1) (t-num))
-              (eqc (t-var 'num2) (t-num))))
+              (eqc (t-var 'lhs) (t-num))
+              (eqc (t-var 'rhs) (t-num))))
       (test (parse minus-test-str) minus-test-exp)
-      (test/pred (generate-constraints (gensym 'top) minus-test-expr)
+      (test/pred (generate-constraints (gensym 'top) minus-test-exp)
                  (constraint-list=? minus-test-constraints))
 
       (define times-test-str '{* 1 2})
-      (define times-test-expr (bin-num-op * (num 1) (num 2)))
+      (define times-test-exp (bin-num-op * (num 1) (num 2)))
       (define times-test-constraints
         (list (eqc (t-var 'top) (t-num))
               (eqc (t-var 'lhs) (t-num))
               (eqc (t-var 'rhs) (t-num))
-              (eqc (t-var 'num1) (t-num))
-              (eqc (t-var 'num2) (t-num))))
+              (eqc (t-var 'lhs) (t-num))
+              (eqc (t-var 'rhs) (t-num))))
       (test (parse times-test-str) times-test-exp)
-      (test/pred (generate-constraints (gensym 'top) times-test-expr)
+      (test/pred (generate-constraints (gensym 'top) times-test-exp)
                  (constraint-list=? times-test-constraints))
 
-      (define bool-test-str '{false})
+      (define bool-test-str 'false)
       (define bool-test-exp (bool false))
       (define bool-test-constraints
         (list (eqc (t-var 'top) (t-bool))))
@@ -438,9 +499,9 @@
       (define iszero-test-str '{iszero 5})
       (define iszero-test-exp (iszero (num 5)))
       (define iszero-test-constraints
-        (list (eqc (t-var 'top) (t-bool)))
-        (list (eqc (t-var 'num) (t-num)))
-        (list (eqc (t-var 'iszero-arg) (t-num))))
+        (list (eqc (t-var 'top) (t-bool))
+              (eqc (t-var 'arg) (t-num))
+              (eqc (t-var 'arg) (t-num))))
       (test (parse iszero-test-str) iszero-test-exp)
       (test/pred (generate-constraints (gensym 'top) iszero-test-exp)
                  (constraint-list=? iszero-test-constraints))
@@ -449,9 +510,9 @@
       (define notypeerror-test-str2 '{iszero true})
       (define notypeerror-test-exp2 (iszero (bool true)))
       (define notypeerror-test-constraints2
-        (list (eqc (t-var 'top) (t-bool)))
-        (list (eqc (t-var 'bool) (t-bool)))
-        (list (eqc (t-var 'iszero-arg) (t-num))))
+        (list (eqc (t-var 'top) (t-bool))
+              (eqc (t-var 'arg) (t-num))
+              (eqc (t-var 'arg) (t-bool))))
       (test (parse notypeerror-test-str2) notypeerror-test-exp2)
       (test/pred (generate-constraints (gensym 'top) notypeerror-test-exp2)
                  (constraint-list=? notypeerror-test-constraints2))
@@ -459,17 +520,119 @@
       (define bif-test-str '{bif true 1 2})
       (define bif-test-exp (bif (bool true) (num 1) (num 2)))
       (define bif-test-constraints
-        (list (eqc (t-var 'top) (t-num)))
-        (list (eqc (t-var 'bool) (t-bool)))
-        (list (eqc (t-var 'if-true) (t-num)))
-        (list (eqc (t-var 'if-false) (t-num)))
-        (list (eqc (t-var 'num1) (t-num)))
-        (list (eqc (t-var 'num2) (t-num))))
+        (list (eqc (t-var 'pred) (t-bool))
+              (eqc (t-var 'top) (t-var 'if-true))
+              (eqc (t-var 'top) (t-var 'if-false))
+              (eqc (t-var 'pred) (t-bool))
+              (eqc (t-var 'if-true) (t-num))
+              (eqc (t-var 'if-false) (t-num))))
       (test (parse bif-test-str) bif-test-exp)
       (test/pred (generate-constraints (gensym 'top) bif-test-exp)
                  (constraint-list=? bif-test-constraints))
 
-      ; TODO: is this test correct?
+      (define with-test1-str '{with {x 1} 2})
+      (define with-test1-exp (with 'x (num 1) (num 2)))
+      (define with-test1-constraints
+        (list (eqc (t-var 'top) (t-var 'with-body))
+              (eqc (t-var 'x) (t-var 'bound-expr))
+              (eqc (t-var 'bound-expr) (t-num))
+              (eqc (t-var 'with-body) (t-num))))
+      (test (parse with-test1-str) with-test1-exp)
+      (test/pred (generate-constraints (gensym 'top) with-test1-exp)
+                 (constraint-list=? with-test1-constraints))
+
+      ; In this test, the constraints should conflate both x's into a single type, because we haven't run alpha-vary on the expression beforehand.
+      (define with-test2-str '{with {x 1} {with {x {+ x x}} x}})
+      (define with-test2-exp (with 'x (num 1) (with 'x (bin-num-op + (id 'x) (id 'x)) (id 'x))))
+      (define with-test2-constraints
+        (list (eqc (t-var 'top) (t-var 'outer-with-body))
+                (eqc (t-var 'x) (t-var 'outer-bound-expr))
+                (eqc (t-var 'outer-bound-expr) (t-num))
+                (eqc (t-var 'outer-with-body) (t-var 'inner-with-body))
+                  (eqc (t-var 'x) (t-var 'inner-bound-expr))
+                  (eqc (t-var 'inner-bound-expr) (t-num))
+                    (eqc (t-var 'inner-lhs) (t-num))
+                    (eqc (t-var 'inner-rhs) (t-num))
+                    (eqc (t-var 'inner-lhs) (t-var 'x))
+                    (eqc (t-var 'inner-rhs) (t-var 'x))
+                  (eqc (t-var 'inner-with-body) (t-var 'x))))
+      (test (parse with-test2-str) with-test2-exp)
+      (test/pred (generate-constraints (gensym 'top) with-test2-exp)
+                 (constraint-list=? with-test2-constraints))
+
+      (define recwith-test1-str '{rec {f {fun {x} 1}} 2})
+      (define recwith-test1-exp (rec-with 'f (fun 'x (num 1)) (num 2)))
+      (define recwith-test1-constraints
+        (list
+          (eqc (t-var 'top) (t-var 'with-body))
+          (eqc (t-var 'f) (t-var 'bind-body))
+          (eqc (t-var 'bind-body) (t-fun (t-var 'x) (t-var 'fun-body)))
+
+          (eqc (t-var 'fun-body) (t-num))
+          (eqc (t-var 'with-body) (t-num))
+          ))
+      (test (parse recwith-test1-str) recwith-test1-exp)
+      (test/pred (generate-constraints (gensym 'top) recwith-test1-exp)
+                 (constraint-list=? recwith-test1-constraints))
+
+      (define recwith-test2-str '{rec {f {fun {x} {f x}}} {f 2}})
+      (define recwith-test2-exp (rec-with 'f (fun 'x (app (id 'f) (id 'x))) (app (id 'f) (num 2))))
+      (define recwith-test2-constraints
+        (list
+          (eqc (t-var 'top) (t-var 'with-body))
+          (eqc (t-var 'f) (t-var 'bind-body))
+          (eqc (t-var 'bind-body) (t-fun (t-var 'x) (t-var 'fun-body)))
+
+          (eqc (t-var 'fun-body) (t-var 'alpha))
+          (eqc (t-var 'fun-body-f) (t-fun (t-var 'inner-arg) (t-var 'alpha)))
+            (eqc (t-var 'fun-body-f) (t-var 'f))
+            (eqc (t-var 'inner-arg) (t-var 'x))
+
+          (eqc (t-var 'with-body) (t-var 'beta))
+          (eqc (t-var 'with-body-f) (t-fun (t-var 'outer-arg) (t-var 'beta)))
+            (eqc (t-var 'with-body-f) (t-var 'f))
+            (eqc (t-var 'outer-arg) (t-num))
+          ))
+      (test (parse recwith-test2-str) recwith-test2-exp)
+      (test/pred (generate-constraints (gensym 'top) recwith-test2-exp)
+                 (constraint-list=? recwith-test2-constraints))
+
+      ; TODO: test {rec {my-list {tcons 1 my-list}} my-list} ? Wait for TA response
+
+      (define fun-test1-str '{fun {x} 2})
+      (define fun-test1-exp (fun 'x (num 2)))
+      (define fun-test1-constraints
+        (list (eqc (t-var 'top) (t-fun (t-var 'x) (t-var 'body)))
+              (eqc (t-var 'body) (t-num))))
+      (test (parse fun-test1-str) fun-test1-exp)
+      (test/pred (generate-constraints (gensym 'top) fun-test1-exp)
+                 (constraint-list=? fun-test1-constraints))
+
+      (define fun-test2-str '{fun {x} {+ x 1}})
+      (define fun-test2-exp (fun 'x (bin-num-op + (id 'x) (num 1))))
+      (define fun-test2-constraints
+        (list (eqc (t-var 'top) (t-fun (t-var 'x) (t-var 'body)))
+              (eqc (t-var 'body) (t-num))
+              (eqc (t-var 'lhs) (t-num))
+              (eqc (t-var 'rhs) (t-num))
+              (eqc (t-var 'lhs) (t-var 'x))
+              (eqc (t-var 'rhs) (t-num))
+              ))
+      (test (parse fun-test2-str) fun-test2-exp)
+      (test/pred (generate-constraints (gensym 'top) fun-test2-exp)
+                 (constraint-list=? fun-test2-constraints))
+
+      (define app-test-str '{f 1})
+      (define app-test-exp (app (id 'f) (num 1)))
+      (define app-test-constraints
+        (list (eqc (t-var 'top) (t-var 'alpha))
+              (eqc (t-var 'function) (t-fun (t-var 'arg) (t-var 'alpha)))
+              (eqc (t-var 'function) (t-var 'f))
+              (eqc (t-var 'arg) (t-num))))
+      (test (parse app-test-str) app-test-exp)
+      (test/pred (generate-constraints (gensym 'top) app-test-exp)
+                 (constraint-list=? app-test-constraints))
+
       (define tempty-test-str 'tempty)
       (define tempty-test-exp (tempty))
       (define tempty-test-constraints
@@ -482,20 +645,86 @@
       (define tcons-test-str '{tcons 1 tempty})
       (define tcons-test-exp (tcons (num 1) (tempty)))
       (define tcons-test-constraints
-        (list (eqc (t-var 'top) ?) ; TODO: finish this
+        (list (eqc (t-var 'top) (t-list (t-var 'alpha)))
+              (eqc (t-var 'fst) (t-var 'alpha))
+              (eqc (t-var 'rst) (t-list (t-var 'alpha)))
+              (eqc (t-var 'fst) (t-num))
+              (eqc (t-var 'rst) (t-list (t-var 'beta)))))
       (test (parse tcons-test-str) tcons-test-exp)
       (test/pred (generate-constraints (gensym 'top) tcons-test-exp)
                  (constraint-list=? tcons-test-constraints))
 
-      ; TODO: basic tests for:
-      ;   with
-      ;   rec-with
-      ;   fun
-      ;   app
-      ;   tcons
-      ;   tfirst
-      ;   trest
-      ;   istempty
+      (define tfirst-test1-str '{tfirst tempty})
+      (define tfirst-test1-exp (tfirst (tempty)))
+      (define tfirst-test1-constraints
+        (list (eqc (t-var 'top) (t-var 'alpha))
+              (eqc (t-var 'lst) (t-list (t-var 'alpha)))
+              (eqc (t-var 'lst) (t-list (t-var 'beta)))))
+      (test (parse tfirst-test1-str) tfirst-test1-exp)
+      (test/pred (generate-constraints (gensym 'top) tfirst-test1-exp)
+                 (constraint-list=? tfirst-test1-constraints))
+
+      (define tfirst-test2-str '{tfirst {tcons 1 tempty}})
+      (define tfirst-test2-exp (tfirst (tcons (num 1) (tempty))))
+      (define tfirst-test2-constraints
+        (list (eqc (t-var 'top) (t-var 'alpha))
+              (eqc (t-var 'lst) (t-list (t-var 'alpha)))
+              (eqc (t-var 'lst) (t-list (t-var 'beta)))
+              (eqc (t-var 'fst) (t-var 'beta))
+              (eqc (t-var 'rst) (t-list (t-var 'beta)))
+              (eqc (t-var 'fst) (t-num))
+              (eqc (t-var 'rst) (t-list (t-var 'gamma)))))
+      (test (parse tfirst-test2-str) tfirst-test2-exp)
+      (test/pred (generate-constraints (gensym 'top) tfirst-test2-exp)
+                 (constraint-list=? tfirst-test2-constraints))
+
+      (define trest-test1-str '{trest tempty})
+      (define trest-test1-exp (trest (tempty)))
+      (define trest-test1-constraints
+        (list (eqc (t-var 'top) (t-list (t-var 'alpha)))
+              (eqc (t-var 'lst) (t-list (t-var 'alpha)))
+              (eqc (t-var 'lst) (t-list (t-var 'beta)))))
+      (test (parse trest-test1-str) trest-test1-exp)
+      (test/pred (generate-constraints (gensym 'top) trest-test1-exp)
+                 (constraint-list=? trest-test1-constraints))
+
+      (define trest-test2-str '{trest {tcons 1 tempty}})
+      (define trest-test2-exp (trest (tcons (num 1) (tempty))))
+      (define trest-test2-constraints
+        (list (eqc (t-var 'top) (t-list (t-var 'alpha)))
+              (eqc (t-var 'lst) (t-list (t-var 'alpha)))
+              (eqc (t-var 'lst) (t-list (t-var 'beta)))
+              (eqc (t-var 'fst) (t-var 'beta))
+              (eqc (t-var 'rst) (t-list (t-var 'beta)))
+              (eqc (t-var 'fst) (t-num))
+              (eqc (t-var 'rst) (t-list (t-var 'gamma)))))
+      (test (parse trest-test2-str) trest-test2-exp)
+      (test/pred (generate-constraints (gensym 'top) trest-test2-exp)
+                 (constraint-list=? trest-test2-constraints))
+
+      (define tempty?-test1-str '{tempty? tempty})
+      (define tempty?-test1-exp (istempty (tempty)))
+      (define tempty?-test1-constraints
+        (list (eqc (t-var 'top) (t-bool))
+              (eqc (t-var 'lst) (t-list (t-var 'alpha)))
+              (eqc (t-var 'lst) (t-list (t-var 'beta)))))
+      (test (parse tempty?-test1-str) tempty?-test1-exp)
+      (test/pred (generate-constraints (gensym 'top) tempty?-test1-exp)
+                 (constraint-list=? tempty?-test1-constraints))
+
+      (define tempty?-test2-str '{tempty? {tcons 1 tempty}})
+      (define tempty?-test2-exp (istempty (tcons (num 1) (tempty))))
+      (define tempty?-test2-constraints
+        (list (eqc (t-var 'top) (t-bool))
+              (eqc (t-var 'lst) (t-list (t-var 'alpha)))
+              (eqc (t-var 'lst) (t-list (t-var 'beta)))
+              (eqc (t-var 'fst) (t-var 'beta))
+              (eqc (t-var 'rst) (t-list (t-var 'beta)))
+              (eqc (t-var 'fst) (t-num))
+              (eqc (t-var 'rst) (t-list (t-var 'gamma)))))
+      (test (parse tempty?-test2-str) tempty?-test2-exp)
+      (test/pred (generate-constraints (gensym 'top) tempty?-test2-exp)
+                 (constraint-list=? tempty?-test2-constraints))
 
     ; TODO: extensive tests
 
@@ -506,6 +735,7 @@
 
   ; tests
     ; TODO: test
+
 ; infer-type : Expr -> Type
 ; given an Expr, infers the type of the result or throws an error
 (define (infer-type expr)
@@ -519,7 +749,17 @@
   ; tests
     ; TODO: test
 
+
+
+; TODO: is this true? wait for response to https://groups.google.com/forum/#!topic/byu-cs-330-fall-2015/sFLnnq04Gc8
+;   (test (infer-type (parse '{rec {my-list {tcons 1 my-list}} my-list}))
+;         (t-list (t-num)))
+;   TODO: also, make sure that with doesn't accidentally behave like rec-with
+
+
+
 ; TODO: look at the "testing hints" section on the assignment details page
   ; TODO: including "Make sure you have test cases for the occurs check [PLAI 282]."
 ; TODO: extra credit
-; TODO: do we need to do anything with meta-types? e.g. list<alpha>
+
+
