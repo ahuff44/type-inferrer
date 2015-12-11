@@ -1,5 +1,5 @@
 #lang plai
-(print-only-errors #f)
+(print-only-errors #t)
 (halt-on-errors #t)
 
 (define-type Expr
@@ -276,7 +276,7 @@
     [bin-num-op (op lhs rhs)
       (bin-num-op op (simple-recurse lhs) (simple-recurse rhs))]
     [iszero (e)
-      (simple-recurse e)]
+      (iszero (simple-recurse e))]
     [bif (c t e)
       (bif (simple-recurse c) (simple-recurse t) (simple-recurse e))]
     [with (bound-id bound-body with-body)
@@ -415,7 +415,7 @@
               [define lst-id (gensym 'lst)]
               [define lst-c (generate-constraints lst-id lst)])
         (append
-          (list (eqc (t-var 'top) (t-var alpha-id))
+          (list (eqc (t-var e-id) (t-var alpha-id))
                 (eqc (t-var lst-id) (t-list (t-var alpha-id))))
           lst-c))]
     [trest (lst)
@@ -476,14 +476,18 @@
               (error 'unify "Type Error: Unable to unify constraints")])]
         [t-list (elem-type)
           (type-case Type rhs
+            [t-var (v)
+              (subst-and-recurse rhs lhs)]
             [t-list (alpha)
-              (let ([new-loc (cons (eqc elem-type alpha)
-                                   loc)])
-                (unify/helper subst new-loc))]
+              (let ([new-tail (cons (eqc elem-type alpha)
+                                    tail)])
+                (unify/helper subst new-tail))]
             [else
               (error 'unify "Type Error: Unable to unify constrapints")])]
         [t-fun (arg-type result-type)
           (type-case Type rhs
+            [t-var (v)
+              (subst-and-recurse rhs lhs)]
             [t-fun (alpha beta)
               (let ([new-tail (cons (eqc arg-type alpha)
                                     (cons (eqc result-type beta)
@@ -561,11 +565,21 @@
             (list (eqc (t-var 'beta) (t-bool))
                   (eqc (t-bool) (t-var 'beta))))
 
+; lookup-constraint : symbol (listof Constraint) -> Type
+; TODO: document
+(define (lookup-constraint target-name loc)
+  (match loc
+    [(list)
+      (error 'infer-type "Internal Assertion Error: Could not find type of constraint")]
+    [(cons (eqc (t-var current-name) current-value) tail)
+      (if (equal? target-name current-name)
+        current-value
+        (lookup-constraint target-name tail))]))
+
 ; infer-type : Expr -> Type
 ; given an Expr, infers the type of the result or throws an error
 (define (infer-type expr)
-  (let ([result-sym (gensym 'result)]
-        [lookup-constraint (lambda (c-sym) (error "unimplemented"))])
+  (let ([result-sym (gensym 'result)])
     (lookup-constraint
       result-sym
       (unify (generate-constraints result-sym (alpha-vary expr))))))
@@ -589,6 +603,8 @@
                (constraint-list=? num-test-constraints))
     (test/pred (unify num-test-constraints)
                (constraint-list=? num-test-unified-constraints))
+    (test/pred (infer-type num-test-exp)
+               (type=? (t-num)))
 
     (define id-test-str 'x)
     (define id-test-exp (id 'x))
@@ -601,6 +617,8 @@
                (constraint-list=? id-test-constraints))
     (test/pred (unify id-test-constraints)
                (constraint-list=? id-test-unified-constraints))
+    (test/exn (infer-type id-test-exp)
+              "Type Error: Unbound identifier")
 
     (define plus-test-str '{+ 1 2})
     (define plus-test-exp (bin-num-op + (num 1) (num 2)))
@@ -619,6 +637,8 @@
                (constraint-list=? plus-test-constraints))
     (test/pred (unify plus-test-constraints)
                (constraint-list=? plus-test-unified-constraints))
+    (test/pred (infer-type plus-test-exp)
+               (type=? (t-num)))
 
     (define minus-test-str '{- 1 2})
     (define minus-test-exp (bin-num-op - (num 1) (num 2)))
@@ -637,6 +657,8 @@
                (constraint-list=? minus-test-constraints))
     (test/pred (unify minus-test-constraints)
                (constraint-list=? minus-test-unified-constraints))
+    (test/pred (infer-type minus-test-exp)
+               (type=? (t-num)))
 
     (define times-test-str '{* 1 2})
     (define times-test-exp (bin-num-op * (num 1) (num 2)))
@@ -655,6 +677,8 @@
                (constraint-list=? times-test-constraints))
     (test/pred (unify times-test-constraints)
                (constraint-list=? times-test-unified-constraints))
+    (test/pred (infer-type times-test-exp)
+               (type=? (t-num)))
 
     (define bool-test-str 'false)
     (define bool-test-exp (bool false))
@@ -663,6 +687,8 @@
     (test (parse bool-test-str) bool-test-exp)
     (test/pred (generate-constraints (gensym 'top) bool-test-exp)
                (constraint-list=? bool-test-constraints))
+    (test/pred (infer-type bool-test-exp)
+               (type=? (t-bool)))
 
     (define iszero-test-str '{iszero 5})
     (define iszero-test-exp (iszero (num 5)))
@@ -678,8 +704,10 @@
                (constraint-list=? iszero-test-constraints))
     (test/pred (unify iszero-test-constraints)
                (constraint-list=? iszero-test-unified-constraints))
+    (test/pred (infer-type iszero-test-exp)
+               (type=? (t-bool)))
 
-    ; should not find type errors
+    ; should not find type errors until we run unify
     (define notypeerror-test-str2 '{iszero true})
     (define notypeerror-test-exp2 (iszero (bool true)))
     (define notypeerror-test-constraints2
@@ -689,6 +717,10 @@
     (test (parse notypeerror-test-str2) notypeerror-test-exp2)
     (test/pred (generate-constraints (gensym 'top) notypeerror-test-exp2)
                (constraint-list=? notypeerror-test-constraints2))
+    (test/exn (unify notypeerror-test-constraints2)
+              "Type Error: Unable to unify constraints")
+    (test/exn (infer-type notypeerror-test-exp2)
+              "Type Error: Unable to unify constraints")
 
     (define bif-test-str '{bif true 1 2})
     (define bif-test-exp (bif (bool true) (num 1) (num 2)))
@@ -709,6 +741,8 @@
                (constraint-list=? bif-test-constraints))
     (test/pred (unify bif-test-constraints)
                (constraint-list=? bif-test-unified-constraints))
+    (test/pred (infer-type bif-test-exp)
+               (type=? (t-num)))
 
     (define with-test1-str '{with {x 1} 2})
     (define with-test1-exp (with 'x (num 1) (num 2)))
@@ -727,6 +761,8 @@
                (constraint-list=? with-test1-constraints))
     (test/pred (unify with-test1-constraints)
                (constraint-list=? with-test1-unified-constraints))
+    (test/pred (infer-type with-test1-exp)
+               (type=? (t-num)))
 
     ; TODO s/+xx/iszero x/
     ; In this test, the constraints should conflate both x's into a single type, because we haven't run alpha-vary on the expression beforehand.
@@ -753,6 +789,8 @@
                (constraint-list=? with-test2-constraints))
     ; (test/pred (unify with-test2-constraints)
     ;            (constraint-list=? with-test2-unified-constraints))
+    ; (test/pred (infer-type with-test1-exp)
+    ;            (type=? (t-num)))
 
     (define recwith-test1-str '{rec {f {fun {x} 1}} 2})
     (define recwith-test1-exp (rec-with 'f (fun 'x (num 1)) (num 2)))
@@ -775,8 +813,9 @@
                (constraint-list=? recwith-test1-constraints))
     (test/pred (unify recwith-test1-constraints)
                (constraint-list=? recwith-test1-unified-constraints))
+    (test/pred (infer-type recwith-test1-exp)
+               (type=? (t-num)))
 
-    ; TODO: do by hand
     (define recwith-test2-str '{rec {f {fun {x} {f x}}} {f 2}})
     (define recwith-test2-exp (rec-with 'f (fun 'x (app (id 'f) (id 'x))) (app (id 'f) (num 2))))
     (define recwith-test2-constraints
@@ -812,6 +851,8 @@
                (constraint-list=? recwith-test2-constraints))
     (test/pred (unify recwith-test2-constraints)
                (constraint-list=? recwith-test2-unified-constraints))
+    (test/pred (infer-type recwith-test2-exp)
+               (type=? (t-var 'beta)))
 
     ; TODO: test {rec {my-list {tcons 1 my-list}} my-list} ? Wait for TA response
 
@@ -828,6 +869,8 @@
                (constraint-list=? fun-test1-constraints))
     (test/pred (unify fun-test1-constraints)
                (constraint-list=? fun-test1-unified-constraints))
+    (test/pred (infer-type fun-test1-exp)
+               (type=? (t-fun (t-var 'alpha) (t-num))))
 
     (define fun-test2-str '{fun {x} {+ x 1}})
     (define fun-test2-exp (fun 'x (bin-num-op + (id 'x) (num 1))))
@@ -842,12 +885,15 @@
       (list (eqc (t-var 'top) (t-fun (t-num) (t-num)))
             (eqc (t-var 'body) (t-num))
             (eqc (t-var 'lhs) (t-num))
-            (eqc (t-var 'rhs) (t-num))))
+            (eqc (t-var 'rhs) (t-num))
+            (eqc (t-var 'x) (t-num))))
     (test (parse fun-test2-str) fun-test2-exp)
     (test/pred (generate-constraints (gensym 'top) fun-test2-exp)
                (constraint-list=? fun-test2-constraints))
     (test/pred (unify fun-test2-constraints)
                (constraint-list=? fun-test2-unified-constraints))
+    (test/pred (infer-type fun-test2-exp)
+               (type=? (t-fun (t-num) (t-num))))
 
     (define app-test-str '{f 1})
     (define app-test-exp (app (id 'f) (num 1)))
@@ -859,12 +905,15 @@
     (define app-test-unified-constraints
       (list (eqc (t-var 'top) (t-var 'alpha))
             (eqc (t-var 'function) (t-fun (t-num) (t-var 'alpha)))
+            (eqc (t-var 'f) (t-fun (t-num) (t-var 'alpha)))
             (eqc (t-var 'arg) (t-num))))
     (test (parse app-test-str) app-test-exp)
     (test/pred (generate-constraints (gensym 'top) app-test-exp)
                (constraint-list=? app-test-constraints))
     (test/pred (unify app-test-constraints)
                (constraint-list=? app-test-unified-constraints))
+    (test/exn (infer-type app-test-exp)
+              "Type Error: Unbound identifier")
 
     (define tempty-test-str 'tempty)
     (define tempty-test-exp (tempty))
@@ -877,6 +926,8 @@
                (constraint-list=? tempty-test-constraints))
     (test/pred (unify tempty-test-constraints)
                (constraint-list=? tempty-test-unified-constraints))
+    (test/pred (infer-type tempty-test-exp)
+               (type=? (t-list (t-var 'alpha))))
 
     (define tcons-test-str '{tcons 1 tempty})
     (define tcons-test-exp (tcons (num 1) (tempty)))
@@ -889,12 +940,16 @@
     (define tcons-test-unified-constraints
       (list (eqc (t-var 'top) (t-list (t-num)))
             (eqc (t-var 'fst) (t-num))
-            (eqc (t-var 'rst) (t-list (t-num)))))
+            (eqc (t-var 'rst) (t-list (t-num)))
+            (eqc (t-var 'alpha) (t-num))
+            (eqc (t-var 'beta) (t-num))))
     (test (parse tcons-test-str) tcons-test-exp)
     (test/pred (generate-constraints (gensym 'top) tcons-test-exp)
                (constraint-list=? tcons-test-constraints))
     (test/pred (unify tcons-test-constraints)
                (constraint-list=? tcons-test-unified-constraints))
+    (test/pred (infer-type tcons-test-exp)
+               (type=? (t-list (t-num))))
 
     (define tfirst-test1-str '{tfirst tempty})
     (define tfirst-test1-exp (tfirst (tempty)))
@@ -904,12 +959,15 @@
             (eqc (t-var 'lst) (t-list (t-var 'beta)))))
     (define tfirst-test1-unified-constraints
       (list (eqc (t-var 'top) (t-var 'alpha))
-            (eqc (t-var 'lst) (t-list (t-var 'alpha)))))
+            (eqc (t-var 'lst) (t-list (t-var 'alpha)))
+            (eqc (t-var 'beta) (t-var 'alpha))))
     (test (parse tfirst-test1-str) tfirst-test1-exp)
     (test/pred (generate-constraints (gensym 'top) tfirst-test1-exp)
                (constraint-list=? tfirst-test1-constraints))
     (test/pred (unify tfirst-test1-constraints)
                (constraint-list=? tfirst-test1-unified-constraints))
+    (test/pred (infer-type tfirst-test1-exp)
+               (type=? (t-var 'alpha)))
 
     (define tfirst-test2-str '{tfirst {tcons 1 tempty}})
     (define tfirst-test2-exp (tfirst (tcons (num 1) (tempty))))
@@ -926,13 +984,18 @@
     (define tfirst-test2-unified-constraints
       (list (eqc (t-var 'top) (t-num))
             (eqc (t-var 'lst) (t-list (t-num)))
+            (eqc (t-var 'alpha) (t-num))
             (eqc (t-var 'fst) (t-num))
-            (eqc (t-var 'rst) (t-list (t-num)))))
+            (eqc (t-var 'rst) (t-list (t-num)))
+            (eqc (t-var 'beta) (t-num))
+            (eqc (t-var 'gamma) (t-num))))
     (test (parse tfirst-test2-str) tfirst-test2-exp)
     (test/pred (generate-constraints (gensym 'top) tfirst-test2-exp)
                (constraint-list=? tfirst-test2-constraints))
     (test/pred (unify tfirst-test2-constraints)
                (constraint-list=? tfirst-test2-unified-constraints))
+    (test/pred (infer-type tfirst-test2-exp)
+               (type=? (t-num)))
 
     (define trest-test1-str '{trest tempty})
     (define trest-test1-exp (trest (tempty)))
@@ -942,12 +1005,15 @@
             (eqc (t-var 'lst) (t-list (t-var 'beta)))))
     (define trest-test1-unified-constraints
       (list (eqc (t-var 'top) (t-list (t-var 'alpha)))
-            (eqc (t-var 'lst) (t-list (t-var 'alpha)))))
+            (eqc (t-var 'lst) (t-list (t-var 'alpha)))
+            (eqc (t-var 'beta) (t-var 'alpha))))
     (test (parse trest-test1-str) trest-test1-exp)
     (test/pred (generate-constraints (gensym 'top) trest-test1-exp)
                (constraint-list=? trest-test1-constraints))
     (test/pred (unify trest-test1-constraints)
                (constraint-list=? trest-test1-unified-constraints))
+    (test/pred (infer-type trest-test1-exp)
+               (type=? (t-list (t-var 'alpha))))
 
     (define trest-test2-str '{trest {tcons 1 tempty}})
     (define trest-test2-exp (trest (tcons (num 1) (tempty))))
@@ -962,13 +1028,18 @@
     (define trest-test2-unified-constraints
       (list (eqc (t-var 'top) (t-list (t-num)))
             (eqc (t-var 'lst) (t-list (t-num)))
+            (eqc (t-var 'alpha) (t-num))
+            (eqc (t-var 'fst) (t-num))
             (eqc (t-var 'rst) (t-list (t-num)))
-            (eqc (t-var 'fst) (t-num))))
+            (eqc (t-var 'beta) (t-num))
+            (eqc (t-var 'gamma) (t-num))))
     (test (parse trest-test2-str) trest-test2-exp)
     (test/pred (generate-constraints (gensym 'top) trest-test2-exp)
                (constraint-list=? trest-test2-constraints))
     (test/pred (unify trest-test2-constraints)
                (constraint-list=? trest-test2-unified-constraints))
+    (test/pred (infer-type trest-test2-exp)
+               (type=? (t-list (t-num))))
 
     (define tempty?-test1-str '{tempty? tempty})
     (define tempty?-test1-exp (istempty (tempty)))
@@ -978,12 +1049,15 @@
             (eqc (t-var 'lst) (t-list (t-var 'beta)))))
     (define tempty?-test1-unified-constraints
       (list (eqc (t-var 'top) (t-bool))
-            (eqc (t-var 'lst) (t-list (t-var 'alpha)))))
+            (eqc (t-var 'lst) (t-list (t-var 'alpha)))
+            (eqc (t-var 'beta) (t-var 'alpha))))
     (test (parse tempty?-test1-str) tempty?-test1-exp)
     (test/pred (generate-constraints (gensym 'top) tempty?-test1-exp)
                (constraint-list=? tempty?-test1-constraints))
     (test/pred (unify tempty?-test1-constraints)
                (constraint-list=? tempty?-test1-unified-constraints))
+    (test/pred (infer-type tempty?-test1-exp)
+               (type=? (t-bool)))
 
     (define tempty?-test2-str '{tempty? {tcons 1 tempty}})
     (define tempty?-test2-exp (istempty (tcons (num 1) (tempty))))
@@ -1000,13 +1074,18 @@
     (define tempty?-test2-unified-constraints
       (list (eqc (t-var 'top) (t-bool))
             (eqc (t-var 'lst) (t-list (t-num)))
+            (eqc (t-var 'alpha) (t-num))
+            (eqc (t-var 'fst) (t-num))
             (eqc (t-var 'rst) (t-list (t-num)))
-            (eqc (t-var 'fst) (t-num))))
+            (eqc (t-var 'beta) (t-num))
+            (eqc (t-var 'gamma) (t-num))))
     (test (parse tempty?-test2-str) tempty?-test2-exp)
     (test/pred (generate-constraints (gensym 'top) tempty?-test2-exp)
                (constraint-list=? tempty?-test2-constraints))
     (test/pred (unify tempty?-test2-constraints)
                (constraint-list=? tempty?-test2-unified-constraints))
+    (test/pred (infer-type tempty?-test2-exp)
+               (type=? (t-bool)))
 
   ; TODO: extensive tests
 
