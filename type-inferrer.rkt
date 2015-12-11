@@ -97,6 +97,115 @@
              "~s and ~a are not equal (modulo renaming)"
              lc1 lc2)))
 
+; occurs-in : Type::t-var Type -> boolean
+; TODO: document
+(define (occurs-in target-type-var type-to-subst)
+  (unless (t-var? target-type-var)
+    (error 'unify "Internal Assertion Error: occurs-in not passed a t-var"))
+  (define (simple-recurse t)
+    (occurs-in target-type-var t))
+  (type-case Type type-to-subst
+    [t-num () false]
+    [t-bool () false]
+    [t-list (elem-type) (simple-recurse elem-type)]
+    [t-fun (arg-type result-type)
+      (or (simple-recurse arg-type)
+          (simple-recurse result-type))]
+    [t-var (sym) (equal? type-to-subst target-type-var)]))
+
+  ; tests
+    (test (occurs-in (t-var 'a) (t-num)) false)
+    (test (occurs-in (t-var 'a) (t-bool)) false)
+    (test (occurs-in (t-var 'a) (t-var 'a)) true)
+    (test (occurs-in (t-var 'a) (t-var 'b)) false)
+    (test (occurs-in (t-var 'a) (t-list (t-var 'a))) true)
+    (test (occurs-in (t-var 'a) (t-list (t-var 'b))) false)
+    (test (occurs-in (t-var 'a) (t-fun (t-var 'a) (t-var 'b))) true)
+    (test (occurs-in (t-var 'a) (t-fun (t-var 'b) (t-var 'a))) true)
+    (test (occurs-in (t-var 'a) (t-fun (t-var 'b) (t-var 'b))) false)
+
+    (test (occurs-in (t-var 'a) (t-list (t-fun (t-var 'b) (t-var 'a)))) true)
+    (test (occurs-in (t-var 'a) (t-fun (t-list (t-var 'a)) (t-var 'b))) true)
+
+; fmap-expand-subst : (or (listof Constraint) Constraint Type) Type::t-var Type -> (or (listof Constraint) Constraint Type)
+; inspired by haskell's fmap function
+(define (fmap-expand-subst obj target-type-var type-to-subst)
+  (unless (t-var? target-type-var)
+    (error 'unify "Internal Assertion Error: fmap-expand-subst not passed a t-var"))
+  (define (simple-recurse new-obj)
+    (fmap-expand-subst new-obj target-type-var type-to-subst))
+  (match obj
+    [(? (listof Constraint?) loc)
+      (map simple-recurse loc)]
+    [(eqc lhs rhs)
+      (eqc (simple-recurse lhs)
+           (simple-recurse rhs))]
+    [(? Type? t)
+      (type-case Type t
+        [t-bool ()
+          t]
+        [t-num ()
+          t]
+        [t-var (sym)
+          (if (equal? target-type-var t)
+              (if (occurs-in target-type-var type-to-subst)
+                  (error 'unify "Type Error: Type variable occurs in its expansion")
+                  type-to-subst)
+              t)]
+        [t-list (alpha)
+          (t-list (simple-recurse alpha))]
+        [t-fun (alpha beta)
+          (t-fun (simple-recurse alpha)
+                 (simple-recurse beta))])]))
+
+  ; basic tests
+    (test/exn (fmap-expand-subst (t-num) (t-num) (t-num)) "Internal Assertion Error: fmap-expand-subst not passed a t-var")
+    ; on Types
+      (test (fmap-expand-subst (t-num) (t-var 'alpha) (t-num))
+            (t-num))
+      (test (fmap-expand-subst (t-var 'alpha) (t-var 'alpha) (t-num))
+            (t-num))
+      (test (fmap-expand-subst (t-var 'beta) (t-var 'alpha) (t-num))
+            (t-var 'beta))
+      (test (fmap-expand-subst (t-list (t-var 'alpha)) (t-var 'alpha) (t-num))
+            (t-list (t-num)))
+      (test (fmap-expand-subst (t-list (t-var 'beta)) (t-var 'alpha) (t-num))
+            (t-list (t-var 'beta)))
+      (test (fmap-expand-subst (t-fun (t-var 'alpha) (t-var 'beta)) (t-var 'alpha) (t-num))
+            (t-fun (t-num) (t-var 'beta)))
+      (test (fmap-expand-subst (t-fun (t-var 'beta) (t-var 'alpha)) (t-var 'alpha) (t-num))
+            (t-fun (t-var 'beta) (t-num)))
+
+      (test/exn (fmap-expand-subst (t-var 'alpha) (t-var 'alpha) (t-var 'alpha))
+                "Type Error: Type variable occurs in its expansion")
+    ; on Constraints
+      (test (fmap-expand-subst (eqc (t-var 'alpha) (t-var 'beta)) (t-var 'alpha) (t-bool))
+            (eqc (t-bool) (t-var 'beta)))
+      (test (fmap-expand-subst (eqc (t-var 'beta) (t-var 'alpha)) (t-var 'alpha) (t-bool))
+            (eqc (t-var 'beta) (t-bool)))
+
+      (test/exn (fmap-expand-subst (eqc (t-var 'alpha) (t-var 'alpha)) (t-var 'alpha) (t-var 'alpha))
+                "Type Error: Type variable occurs in its expansion")
+    ; on lists of Constraints
+      (test (fmap-expand-subst (list (eqc (t-var 'alpha) (t-var 'beta))) (t-var 'alpha) (t-bool))
+            (list (eqc (t-bool) (t-var 'beta))))
+      (test (fmap-expand-subst (list (eqc (t-var 'beta) (t-var 'alpha))
+                                       (eqc (t-var 'alpha) (t-var 'beta)))
+                                 (t-var 'alpha) (t-bool))
+            (list (eqc (t-var 'beta) (t-bool))
+                  (eqc (t-bool) (t-var 'beta))))
+
+; lookup-constraint : symbol (listof Constraint) -> Type
+; TODO: document and test (?)
+(define (lookup-constraint target-name loc)
+  (match loc
+    [(list)
+      (error 'infer-type "Internal Assertion Error: Could not find type of constraint")]
+    [(cons (eqc (t-var current-name) current-value) tail)
+      (if (equal? target-name current-name)
+        current-value
+        (lookup-constraint target-name tail))]))
+
 ;------------------------------------------------------------------------------
 ; main functions
 ;------------------------------------------------------------------------------
@@ -243,6 +352,15 @@
     (test (parse '{with {x {+ 1 2}} {+ x 3}}) (with 'x (bin-num-op + (num 1) (num 2)) (bin-num-op + (id 'x) (num 3))))
     (test (parse '{with {x {with {x 1} {+ x 2}}} {with {y 3} {+ x y}}})
           (with 'x (with 'x (num 1) (bin-num-op + (id 'x) (num 2))) (with 'y (num 3) (bin-num-op + (id 'x) (id 'y)))))
+
+    (test (parse '{rec {x 2} x}) (rec-with 'x (num 2) (id 'x)))
+    (test (parse '{rec {x {+ 1 2}} {+ x 3}}) (rec-with 'x (bin-num-op + (num 1) (num 2)) (bin-num-op + (id 'x) (num 3))))
+    (test (parse '{rec {x {rec {x 1} {+ x 2}}} {rec {y 3} {+ x y}}})
+          (rec-with 'x (rec-with 'x (num 1) (bin-num-op + (id 'x) (num 2))) (rec-with 'y (num 3) (bin-num-op + (id 'x) (id 'y)))))
+
+    (test (parse '{rec {x {fun {y} {- x y}}} x}) (rec-with 'x (fun 'y (bin-num-op - (id 'x) (id 'y))) (id 'x)))
+    (test (parse '{rec {x x} x}) (rec-with 'x (id 'x) (id 'x)))
+
     (test (parse '{fun {x} x})
           (fun 'x (id 'x)))
     (test (parse '{fun {x} {iszero x}})
@@ -309,14 +427,27 @@
       (istempty (simple-recurse e))]))
 
 ; alpha-vary : Expr -> Expr
-; TODO: why does this need to throw errors for unbound ids?
-;   I guess otherwise ((compose infer-type parse) '(with (x 5) y))) would return a meta-type (inherited from y's unconstrained type)?
 (define alpha-vary ((curry alpha-vary/helper) (make-immutable-hasheq)))
   ; TODO: test (manually)
     (test/exn (alpha-vary (parse '{with {x {+ x x}} 1})) "Type Error: Unbound identifier")
     ; TODO: manually test:
     ;   - '{with {x 1} {with {x {+ x x}} x}}
     ;   - currently passes
+
+    (test/exn (alpha-vary (parse 'x)) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{+ x y})) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{iszero x})) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{bif x y z})) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{with {x y} {fun {x} y}})) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{rec {x y} {fun {x} y}})) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{fun {x} y})) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{tcons {x 2}})) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{tfirst x})) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{trest x})) "Type Error: Unbound identifier")
+    (test/exn (alpha-vary (parse '{istempty x})) "Type Error: Unbound identifier")
+
+
+
 
 ; generate-constraints : symbol Expr -> (listof Constraint)
 ; TODO: document this
@@ -497,115 +628,6 @@
           (if (equal? lhs rhs)
               (simple-recurse) ; ignore contraints like num = num or alpha = alpha
               (subst-and-recurse lhs rhs))])]))
-
-; occurs-in : Type::t-var Type -> boolean
-; TODO: document
-(define (occurs-in target-type-var type-to-subst)
-  (unless (t-var? target-type-var)
-    (error 'unify "Internal Assertion Error: occurs-in not passed a t-var"))
-  (define (simple-recurse t)
-    (occurs-in target-type-var t))
-  (type-case Type type-to-subst
-    [t-num () false]
-    [t-bool () false]
-    [t-list (elem-type) (simple-recurse elem-type)]
-    [t-fun (arg-type result-type)
-      (or (simple-recurse arg-type)
-          (simple-recurse result-type))]
-    [t-var (sym) (equal? type-to-subst target-type-var)]))
-
-  ; tests
-    (test (occurs-in (t-var 'a) (t-num)) false)
-    (test (occurs-in (t-var 'a) (t-bool)) false)
-    (test (occurs-in (t-var 'a) (t-var 'a)) true)
-    (test (occurs-in (t-var 'a) (t-var 'b)) false)
-    (test (occurs-in (t-var 'a) (t-list (t-var 'a))) true)
-    (test (occurs-in (t-var 'a) (t-list (t-var 'b))) false)
-    (test (occurs-in (t-var 'a) (t-fun (t-var 'a) (t-var 'b))) true)
-    (test (occurs-in (t-var 'a) (t-fun (t-var 'b) (t-var 'a))) true)
-    (test (occurs-in (t-var 'a) (t-fun (t-var 'b) (t-var 'b))) false)
-
-    (test (occurs-in (t-var 'a) (t-list (t-fun (t-var 'b) (t-var 'a)))) true)
-    (test (occurs-in (t-var 'a) (t-fun (t-list (t-var 'a)) (t-var 'b))) true)
-
-; fmap-expand-subst : (or (listof Constraint) Constraint Type) Type::t-var Type -> (or (listof Constraint) Constraint Type)
-; inspired by haskell's fmap function
-(define (fmap-expand-subst obj target-type-var type-to-subst)
-  (unless (t-var? target-type-var)
-    (error 'unify "Internal Assertion Error: fmap-expand-subst not passed a t-var"))
-  (define (simple-recurse new-obj)
-    (fmap-expand-subst new-obj target-type-var type-to-subst))
-  (match obj
-    [(? (listof Constraint?) loc)
-      (map simple-recurse loc)]
-    [(eqc lhs rhs)
-      (eqc (simple-recurse lhs)
-           (simple-recurse rhs))]
-    [(? Type? t)
-      (type-case Type t
-        [t-bool ()
-          t]
-        [t-num ()
-          t]
-        [t-var (sym)
-          (if (equal? target-type-var t)
-              (if (occurs-in target-type-var type-to-subst)
-                  (error 'unify "Type Error: Type variable occurs in its expansion")
-                  type-to-subst)
-              t)]
-        [t-list (alpha)
-          (t-list (simple-recurse alpha))]
-        [t-fun (alpha beta)
-          (t-fun (simple-recurse alpha)
-                 (simple-recurse beta))])]))
-
-  ; basic tests
-    (test/exn (fmap-expand-subst (t-num) (t-num) (t-num)) "Internal Assertion Error: fmap-expand-subst not passed a t-var")
-    ; on Types
-      (test (fmap-expand-subst (t-num) (t-var 'alpha) (t-num))
-            (t-num))
-      (test (fmap-expand-subst (t-var 'alpha) (t-var 'alpha) (t-num))
-            (t-num))
-      (test (fmap-expand-subst (t-var 'beta) (t-var 'alpha) (t-num))
-            (t-var 'beta))
-      (test (fmap-expand-subst (t-list (t-var 'alpha)) (t-var 'alpha) (t-num))
-            (t-list (t-num)))
-      (test (fmap-expand-subst (t-list (t-var 'beta)) (t-var 'alpha) (t-num))
-            (t-list (t-var 'beta)))
-      (test (fmap-expand-subst (t-fun (t-var 'alpha) (t-var 'beta)) (t-var 'alpha) (t-num))
-            (t-fun (t-num) (t-var 'beta)))
-      (test (fmap-expand-subst (t-fun (t-var 'beta) (t-var 'alpha)) (t-var 'alpha) (t-num))
-            (t-fun (t-var 'beta) (t-num)))
-
-      (test/exn (fmap-expand-subst (t-var 'alpha) (t-var 'alpha) (t-var 'alpha))
-                "Type Error: Type variable occurs in its expansion")
-    ; on Constraints
-      (test (fmap-expand-subst (eqc (t-var 'alpha) (t-var 'beta)) (t-var 'alpha) (t-bool))
-            (eqc (t-bool) (t-var 'beta)))
-      (test (fmap-expand-subst (eqc (t-var 'beta) (t-var 'alpha)) (t-var 'alpha) (t-bool))
-            (eqc (t-var 'beta) (t-bool)))
-
-      (test/exn (fmap-expand-subst (eqc (t-var 'alpha) (t-var 'alpha)) (t-var 'alpha) (t-var 'alpha))
-                "Type Error: Type variable occurs in its expansion")
-    ; on lists of Constraints
-      (test (fmap-expand-subst (list (eqc (t-var 'alpha) (t-var 'beta))) (t-var 'alpha) (t-bool))
-            (list (eqc (t-bool) (t-var 'beta))))
-      (test (fmap-expand-subst (list (eqc (t-var 'beta) (t-var 'alpha))
-                                       (eqc (t-var 'alpha) (t-var 'beta)))
-                                 (t-var 'alpha) (t-bool))
-            (list (eqc (t-var 'beta) (t-bool))
-                  (eqc (t-bool) (t-var 'beta))))
-
-; lookup-constraint : symbol (listof Constraint) -> Type
-; TODO: document
-(define (lookup-constraint target-name loc)
-  (match loc
-    [(list)
-      (error 'infer-type "Internal Assertion Error: Could not find type of constraint")]
-    [(cons (eqc (t-var current-name) current-value) tail)
-      (if (equal? target-name current-name)
-        current-value
-        (lookup-constraint target-name tail))]))
 
 ; infer-type : Expr -> Type
 ; given an Expr, infers the type of the result or throws an error
@@ -793,33 +815,26 @@
     (test/pred (infer-type with-test1-exp)
                (type=? (t-num)))
 
-    ; TODO: s/+xx/iszero x/
     ; In this test, the constraints should conflate both x's into a single type, because we haven't run alpha-vary on the expression beforehand.
-    (define with-test2-str '{with {x 1} {with {x {+ x x}} x}})
-    (define with-test2-exp (with 'x (num 1) (with 'x (bin-num-op + (id 'x) (id 'x)) (id 'x))))
+    (define with-test2-str '{with {x 1} {with {x {iszero x}} x}})
+    (define with-test2-exp (with 'x (num 1) (with 'x (iszero (id 'x)) (id 'x))))
     (define with-test2-constraints
       (list (eqc (t-var 'top) (t-var 'outer-with-body))
               (eqc (t-var 'x) (t-var 'outer-bound-expr))
               (eqc (t-var 'outer-bound-expr) (t-num))
               (eqc (t-var 'outer-with-body) (t-var 'inner-with-body))
                 (eqc (t-var 'x) (t-var 'inner-bound-expr))
-                (eqc (t-var 'inner-bound-expr) (t-num))
-                  (eqc (t-var 'inner-lhs) (t-num))
-                  (eqc (t-var 'inner-rhs) (t-num))
-                  (eqc (t-var 'inner-lhs) (t-var 'x))
-                  (eqc (t-var 'inner-rhs) (t-var 'x))
+                (eqc (t-var 'inner-bound-expr) (t-bool))
+                  (eqc (t-var 'iszero-arg) (t-num))
+                  (eqc (t-var 'iszero-arg) (t-var 'x))
                 (eqc (t-var 'inner-with-body) (t-var 'x))))
-    ; (define with-test2-unified-constraints
-    ;   (list
-    ;         (eqc () ())
-    ;         ))
     (test (parse with-test2-str) with-test2-exp)
     (test/pred (generate-constraints (gensym 'top) with-test2-exp)
                (constraint-list=? with-test2-constraints))
-    ; (test/pred (unify with-test2-constraints)
-    ;            (constraint-list=? with-test2-unified-constraints))
-    ; (test/pred (infer-type with-test1-exp)
-    ;            (type=? (t-num)))
+    (test/exn (unify with-test2-constraints) ; this one fails because we haven't used alpha-vary
+              "Type Error: Unable to unify constraints")
+    (test/pred (infer-type with-test2-exp) ; this correctly runs alpha-vary and finds the type to be bool
+               (type=? (t-bool)))
 
     (define recwith-test1-str '{rec {f {fun {x} 1}} 2})
     (define recwith-test1-exp (rec-with 'f (fun 'x (num 1)) (num 2)))
@@ -1235,10 +1250,6 @@
     (test/pred (unify occurs-case2-test-constraints)
                (constraint-list=? occurs-case2-test-unified-constraints))
 
-;   TODO: make sure rec-with is implemented correctly for alpha-vary and generate constraints
-
-
-
 ;----------------------------
 ;
 ; Extra credit
@@ -1249,3 +1260,15 @@
     '{rec {f {fun {x} {f x}}} f})
   (test/pred (run ec-test-str)
              (type=? (t-fun (t-var 'a) (t-var 'b))))
+
+; TODO:
+  ; writing
+  ;     1- minimal set
+  ;     2- algo for generation
+  ;     3- do this
+  ; code
+  ;     implement writing #2 (and all other given test cases online) as test cases
+  ;     check for copy-paste typo errors
+  ;     check eval.rkt and implement missing tests
+  ;     get adrian's alpha-vary tests
+
