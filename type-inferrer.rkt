@@ -24,7 +24,7 @@
   [t-bool]
   [t-list (elem Type?)]
   [t-fun (arg Type?) (result Type?)]
-  [t-var (v symbol?)]) ; TODO: figure out why this is new in this assignment
+  [t-var (v symbol?)])
 
 (define-type Constraint
   [eqc (lhs Type?) (rhs Type?)])
@@ -270,7 +270,7 @@
       (num n)]
     [id (v)
       (id (hash-ref hash v (lambda ()
-                             (error 'alpha-vary "Type Error: Unbound identifier"))))]
+                             (error 'alpha-vary (format "Type Error: Unbound identifier: ~s" v)))))]
     [bool (b)
       (bool b)]
     [bin-num-op (op lhs rhs)
@@ -498,6 +498,36 @@
               (simple-recurse) ; ignore contraints like num = num or alpha = alpha
               (subst-and-recurse lhs rhs))])]))
 
+; occurs-in : Type::t-var Type -> boolean
+; TODO: document
+(define (occurs-in target-type-var type-to-subst)
+  (unless (t-var? target-type-var)
+    (error 'unify "Internal Assertion Error: occurs-in not passed a t-var"))
+  (define (simple-recurse t)
+    (occurs-in target-type-var t))
+  (type-case Type type-to-subst
+    [t-num () false]
+    [t-bool () false]
+    [t-list (elem-type) (simple-recurse elem-type)]
+    [t-fun (arg-type result-type)
+      (or (simple-recurse arg-type)
+          (simple-recurse result-type))]
+    [t-var (sym) (equal? type-to-subst target-type-var)]))
+
+  ; tests
+    (test (occurs-in (t-var 'a) (t-num)) false)
+    (test (occurs-in (t-var 'a) (t-bool)) false)
+    (test (occurs-in (t-var 'a) (t-var 'a)) true)
+    (test (occurs-in (t-var 'a) (t-var 'b)) false)
+    (test (occurs-in (t-var 'a) (t-list (t-var 'a))) true)
+    (test (occurs-in (t-var 'a) (t-list (t-var 'b))) false)
+    (test (occurs-in (t-var 'a) (t-fun (t-var 'a) (t-var 'b))) true)
+    (test (occurs-in (t-var 'a) (t-fun (t-var 'b) (t-var 'a))) true)
+    (test (occurs-in (t-var 'a) (t-fun (t-var 'b) (t-var 'b))) false)
+
+    (test (occurs-in (t-var 'a) (t-list (t-fun (t-var 'b) (t-var 'a)))) true)
+    (test (occurs-in (t-var 'a) (t-fun (t-list (t-var 'a)) (t-var 'b))) true)
+
 ; fmap-expand-subst : (or (listof Constraint) Constraint Type) Type::t-var Type -> (or (listof Constraint) Constraint Type)
 ; inspired by haskell's fmap function
 (define (fmap-expand-subst obj target-type-var type-to-subst)
@@ -519,13 +549,16 @@
           t]
         [t-var (sym)
           (if (equal? target-type-var t)
-              type-to-subst
+              (if (occurs-in target-type-var type-to-subst)
+                  (error 'unify "Type Error: Type variable occurs in its expansion")
+                  type-to-subst)
               t)]
         [t-list (alpha)
           (t-list (simple-recurse alpha))]
         [t-fun (alpha beta)
           (t-fun (simple-recurse alpha)
                  (simple-recurse beta))])]))
+
   ; basic tests
     (test/exn (fmap-expand-subst (t-num) (t-num) (t-num)) "Internal Assertion Error: fmap-expand-subst not passed a t-var")
     ; on Types
@@ -544,16 +577,16 @@
       (test (fmap-expand-subst (t-fun (t-var 'beta) (t-var 'alpha)) (t-var 'alpha) (t-num))
             (t-fun (t-var 'beta) (t-num)))
 
-      (test (fmap-expand-subst (t-var 'alpha) (t-var 'alpha) (t-var 'alpha))
-            (t-var 'alpha))
+      (test/exn (fmap-expand-subst (t-var 'alpha) (t-var 'alpha) (t-var 'alpha))
+                "Type Error: Type variable occurs in its expansion")
     ; on Constraints
       (test (fmap-expand-subst (eqc (t-var 'alpha) (t-var 'beta)) (t-var 'alpha) (t-bool))
             (eqc (t-bool) (t-var 'beta)))
       (test (fmap-expand-subst (eqc (t-var 'beta) (t-var 'alpha)) (t-var 'alpha) (t-bool))
             (eqc (t-var 'beta) (t-bool)))
 
-      (test (fmap-expand-subst (eqc (t-var 'alpha) (t-var 'alpha)) (t-var 'alpha) (t-var 'alpha))
-            (eqc (t-var 'alpha) (t-var 'alpha)))
+      (test/exn (fmap-expand-subst (eqc (t-var 'alpha) (t-var 'alpha)) (t-var 'alpha) (t-var 'alpha))
+                "Type Error: Type variable occurs in its expansion")
     ; on lists of Constraints
       (test (fmap-expand-subst (list (eqc (t-var 'alpha) (t-var 'beta))) (t-var 'alpha) (t-bool))
             (list (eqc (t-bool) (t-var 'beta))))
@@ -582,8 +615,7 @@
       result-sym
       (unify (generate-constraints result-sym (alpha-vary expr))))))
 
-  ; tests
-    ; TODO: thoroughly test infer-type
+(define run (compose infer-type parse))
 
 
 
@@ -761,7 +793,7 @@
     (test/pred (infer-type with-test1-exp)
                (type=? (t-num)))
 
-    ; TODO s/+xx/iszero x/
+    ; TODO: s/+xx/iszero x/
     ; In this test, the constraints should conflate both x's into a single type, because we haven't run alpha-vary on the expression beforehand.
     (define with-test2-str '{with {x 1} {with {x {+ x x}} x}})
     (define with-test2-exp (with 'x (num 1) (with 'x (bin-num-op + (id 'x) (id 'x)) (id 'x))))
@@ -851,7 +883,15 @@
     (test/pred (infer-type recwith-test2-exp)
                (type=? (t-var 'beta)))
 
-    ; TODO: test {rec {my-list {tcons 1 my-list}} my-list} ? Wait for TA response
+    ; rec works on lists too, not just functions
+    (test (run '{rec {my-list {tcons 1 my-list}} my-list})
+          (t-list (t-num)))
+
+    ; make sure with does NOT work on recursive definitions
+    (test/exn (run '{with {my-list {tcons 1 my-list}} my-list})
+              "Type Error: Unbound identifier")
+    (test/exn (run '{with {f {fun {x} {f x}}} {f 2}})
+              "Type Error: Unbound identifier")
 
     (define fun-test1-str '{fun {x} 2})
     (define fun-test1-exp (fun 'x (num 2)))
@@ -1084,32 +1124,128 @@
     (test/pred (infer-type tempty?-test2-exp)
                (type=? (t-bool)))
 
-  ; TODO: extensive tests
-    (define map-test-str
-      '{rec {map {fun {f} {fun {lst}
-                   {bif {tempty? lst}
-                     tempty
-                     {tcons {f {tfirst lst}} {{map f} {trest lst}}}
-                 }}}} map})
-    (test/pred (infer-type (parse map-test-str))
-               (type=? (t-fun (t-fun (t-var 'a) (t-var 'b))
-                              (t-fun (t-list (t-var 'a)) (t-list (t-var 'b))))))
+; Extensive/wholistic tests
+
+  ; helpers and stubs
+    (define add1-str '{fun {x} {+ x 1}})
+    (test/pred (run add1-str)
+               (type=? (t-fun (t-num) (t-num))))
+    (test/pred (run `{,add1-str 1})
+               (type=? (t-num)))
+    (test/exn (run `{,add1-str false})
+              "Type Error: Unable to unify constraints")
+
+    (define boolint-str '{fun {p} {bif p 1 0}})
+    (test/pred (run boolint-str)
+               (type=? (t-fun (t-bool) (t-num))))
+    (test/exn (run `{,boolint-str 1})
+              "Type Error: Unable to unify constraints")
+    (test/pred (run `{,boolint-str false})
+               (type=? (t-num)))
+
+    (define fact-str
+      '{rec {fact {fun {n}
+         {bif {iszero n}
+           1
+           {* n {fact {- n 1}}}}}}
+           fact})
+    (test/pred (run fact-str)
+               (type=? (t-fun (t-num) (t-num))))
+    (test/pred (run `{,fact-str 4})
+               (type=? (t-num)))
+    (test/exn (run `{,fact-str true})
+              "Type Error: Unable to unify constraints")
+
+  (define map-str
+    '{rec {map {fun {f} {fun {lst}
+                 {bif {tempty? lst}
+                   tempty
+                   {tcons {f {tfirst lst}} {{map f} {trest lst}}}
+               }}}} map})
+  (test/pred (run map-str)
+             (type=? (t-fun (t-fun (t-var 'a) (t-var 'b))
+                            (t-fun (t-list (t-var 'a)) (t-list (t-var 'b))))))
+  ; make sure s/rec/with/ fails
+  (test/exn (run '{with {map {fun {f} {fun {lst}
+                 {bif {tempty? lst}
+                   tempty
+                   {tcons {f {tfirst lst}} {{map f} {trest lst}}}
+               }}}} map})
+            "Type Error: Unbound identifier")
+
+  (define map-add1-str
+    `{,map-str ,add1-str})
+  (test/pred (run map-add1-str)
+             (type=? (t-fun (t-list (t-num)) (t-list (t-num)))))
+  (test/pred (run `{,map-add1-str {tcons 1 {tcons 2 tempty}}})
+             (type=? (t-list (t-num))))
+  (test/exn (run `{,map-add1-str {tcons true {tcons false tempty}}})
+            "Type Error: Unable to unify constraints")
+
+  (define map-boolint-str
+    `{,map-str ,boolint-str})
+  (test/pred (run map-boolint-str)
+             (type=? (t-fun (t-list (t-bool)) (t-list (t-num)))))
+  (test/exn (run `{,map-boolint-str {tcons 1 {tcons 2 tempty}}})
+            "Type Error: Unable to unify constraints")
+  (test/pred (run `{,map-boolint-str {tcons true {tcons false tempty}}})
+             (type=? (t-list (t-num))))
 
 
+  (define map-fact-str
+    `{,map-str ,fact-str})
+  (test/pred (run map-fact-str)
+             (type=? (t-fun (t-list (t-num)) (t-list (t-num)))))
+  (test/pred (run `{,map-fact-str {tcons 1 {tcons 2 tempty}}})
+             (type=? (t-list (t-num))))
+  (test/exn (run `{,map-fact-str {tcons true {tcons false tempty}}})
+            "Type Error: Unable to unify constraints")
 
+  (define complicated-test1-str
+    '{with {g {fun {f} {fun {x} {f x}}}} {g 1}})
+  (test/exn (run complicated-test1-str)
+            "Type Error: Unable to unify constraints")
 
+  (define complicated-test2-str
+    '{fun {x}
+      {with {y x}
+        {with {z y}
+          {tcons x {tcons y {tcons z tempty}}}}}})
+  (test/pred (run complicated-test2-str)
+             (type=? (t-fun (t-var 'a) (t-list (t-var 'a)))))
 
+  ; occurs checking
+    ; alpha = list<alpha>
+    (define occurscheck-test1-str
+      '{fun {x} {tcons x x}})
+    (test/exn (run occurscheck-test1-str)
+              "Type Error: Type variable occurs in its expansion")
 
-; TODO: is this true? wait for response to https://groups.google.com/forum/#!topic/byu-cs-330-fall-2015/sFLnnq04Gc8
-;   (test (infer-type (parse '{rec {my-list {tcons 1 my-list}} my-list}))
-;         (t-list (t-num)))
-;   TODO: also, make sure that with doesn't accidentally behave like rec-with
+    ; alpha = list<list<alpha>>
+    (define occurscheck-test2-str
+      '{fun {x} {tcons x {tfirst x}}})
+    (test/exn (run occurscheck-test2-str)
+              "Type Error: Type variable occurs in its expansion")
+
+    ; doesn't error on alpha = alpha
+    (define occurs-case2-test-constraints
+      (list (eqc (t-var 'a) (t-var 'a))))
+    (define occurs-case2-test-unified-constraints
+      empty)
+    (test/pred (unify occurs-case2-test-constraints)
+               (constraint-list=? occurs-case2-test-unified-constraints))
 
 ;   TODO: make sure rec-with is implemented correctly for alpha-vary and generate constraints
 
 
 
-; TODO: look at the "testing hints" section on the assignment details page
-  ; TODO: including "Make sure you have test cases for the occurs check [PLAI 282]."
+;----------------------------
+;
+; Extra credit
+;
+;----------------------------
 
-; TODO: extra credit
+  (define ec-test-str
+    '{rec {f {fun {x} {f x}}} f})
+  (test/pred (run ec-test-str)
+             (type=? (t-fun (t-var 'a) (t-var 'b))))
