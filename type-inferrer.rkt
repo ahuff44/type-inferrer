@@ -434,20 +434,18 @@
                 (eqc (t-var lst-id) (t-list (t-var (gensym 'alpha)))))
           lst-c))]))
 
-; ; unify : (listof Constraint) -> (listof Constraint)
-; ; TODO: document this
+; unify : (listof Constraint) -> (listof Constraint)
+; TODO: document this
 (define (unify loc)
   (reverse (unify/helper empty loc)))
 
 ; unify/helper : (listof Constraint) -> (listof Constraint)
 ; TODO: document this
 (define (unify/helper subst loc)
-  ; (printf "\n\nunify/helper \n\tsubst=~s\n\tloc=~s\n\n" subst loc)
   (match loc
     [(list) ; loc is empty
       subst]
     [(cons (eqc lhs rhs) tail) ; (? (listof Constraint?) tail)
-      ; (printf "cons\n\n\n\n\n")
       ; subst-and-recurse : Type::t-var Type -> (listof Constraint)
       (define (subst-and-recurse var val)
         (let ([substd-subst (fmap-expand-subst subst var val)]
@@ -583,10 +581,9 @@
     (lookup-constraint
       result-sym
       (unify (generate-constraints result-sym (alpha-vary expr))))))
-  ; TODO: no idea whether this function will work
 
   ; tests
-    ; TODO: test infer-type
+    ; TODO: thoroughly test infer-type
 
 
 
@@ -1088,7 +1085,15 @@
                (type=? (t-bool)))
 
   ; TODO: extensive tests
-
+    (define map-test-str
+      '{rec {map {fun {f} {fun {lst}
+                   {bif {tempty? lst}
+                     tempty
+                     {tcons {f {tfirst lst}} {{map f} {trest lst}}}
+                 }}}} map})
+    (test/pred (infer-type (parse map-test-str))
+               (type=? (t-fun (t-fun (t-var 'a) (t-var 'b))
+                              (t-fun (t-list (t-var 'a)) (t-list (t-var 'b))))))
 
 
 
@@ -1106,6 +1111,5 @@
 
 ; TODO: look at the "testing hints" section on the assignment details page
   ; TODO: including "Make sure you have test cases for the occurs check [PLAI 282]."
+
 ; TODO: extra credit
-
-
